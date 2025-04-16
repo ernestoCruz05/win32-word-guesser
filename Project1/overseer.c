@@ -27,12 +27,12 @@
   */
 
 
-/*
- * Logica do cliente se desconectar
- * Anunciar o "lider" da pontuação 
- *
- *
- */
+  /*
+   * Logica do cliente se desconectar
+   * Anunciar o "lider" da pontuação
+   *
+   *
+   */
 
 #include "utils.h"
 
@@ -183,7 +183,7 @@ BOOL initResources(GameControlData* cdata)
     cdata->sharedMem->running = 0;
     cdata->sharedMem->currentLeaderPoints = 0;
     _tcscpy_s(cdata->sharedMem->currentLeader, MAX_NAME_LENGTH, _T(""));
-	ReleaseMutex(cdata->hGameMutex);
+    ReleaseMutex(cdata->hGameMutex);
 
     cdata->shouldContinue = 1;
 
@@ -351,7 +351,7 @@ int validateGuess(TCHAR* guess) {
     for (int i = 0; i < 51; i++) {
         if (_tcscmp(guess, dictionary[i]) == 0) {
             found = 1;
-        	break;
+            break;
         }
     }
 
@@ -410,7 +410,8 @@ DWORD WINAPI GuessValidationThread(LPVOID pArguments) {
             ReleaseMutex(hMutex);
 
             validateGuess(currentWord);
-        } else
+        }
+        else
         {
             Sleep(500);
         }
@@ -483,7 +484,7 @@ void displaySharedMemory(GameControlData* cdata) {
 
 void broadcastMaker(GameControlData* cdata, const TCHAR* messageContent)
 {
-    GAME_MESSAGE broadcast;
+    /*GAME_MESSAGE broadcast;
     broadcast.msgType = MSG_BROADCAST;
     _tcscpy_s(broadcast.sender, MAX_NAME_LENGTH, _T("SERVER"));
     _tcscpy_s(broadcast.content, 256, messageContent);
@@ -493,7 +494,7 @@ void broadcastMaker(GameControlData* cdata, const TCHAR* messageContent)
             DWORD written;
             WriteFile(cdata->sharedMem->playerList[i].hPipe, &broadcast, sizeof(GAME_MESSAGE), &written, NULL);
         }
-    }
+    }*/
 }
 
 void processCommand(TCHAR* command, GameControlData* cdata) {
@@ -588,10 +589,11 @@ void processCommand(TCHAR* command, GameControlData* cdata) {
             else if (_tcscmp(cmd2, _T("remove")) == 0) {
                 _tprintf(_T("comando bot remove"));
             }
-        } else if (_tcscmp(cmd1, _T("rythm")) == 0)
+        }
+        else if (_tcscmp(cmd1, _T("rythm")) == 0)
         {
-	        if (_tcscmp(cmd2, _T("up")) == 0)
-	        {
+            if (_tcscmp(cmd2, _T("up")) == 0)
+            {
                 if (RITMO > 1000) {
                     RITMO -= 1000;
                 }
@@ -608,8 +610,9 @@ void processCommand(TCHAR* command, GameControlData* cdata) {
                 }
 
                 _tprintf(_T("New speed (RYTHM): %d ms\n"), RITMO);
-	        } else if (_tcscmp(cmd2, _T("down")) == 0)
-	        {
+            }
+            else if (_tcscmp(cmd2, _T("down")) == 0)
+            {
                 RITMO += 1000;
 
                 HKEY hKey;
@@ -619,7 +622,7 @@ void processCommand(TCHAR* command, GameControlData* cdata) {
                 }
 
                 _tprintf(_T("New speed (RYTHM): %d ms\n"), RITMO);
-	        }
+            }
         }
         else {
             _tprintf(_T("Unknown command. Type '?' for help.\n"));
@@ -647,7 +650,7 @@ DWORD WINAPI clientHandler(LPVOID lpParam) {
         switch (msg.msgType) {
         case MSG_REGISTER: {
             BOOL usernameTaken = FALSE;
-            WaitForSingleObject(cdata->hGameMutex, INFINITE); 
+            WaitForSingleObject(cdata->hGameMutex, INFINITE);
             for (int i = 0; i < cdata->sharedMem->playerCount; i++) {
                 if (_tcscmp(cdata->sharedMem->playerList[i].name, msg.sender) == 0) {
                     usernameTaken = TRUE;
@@ -667,7 +670,7 @@ DWORD WINAPI clientHandler(LPVOID lpParam) {
                 DWORD bytesW;
                 WriteFile(hPipe, &response, sizeof(GAME_MESSAGE), &bytesW, NULL);
 
-                CloseHandle(hPipe); 
+                CloseHandle(hPipe);
                 free(ctx);
                 return 0;
             }
@@ -745,7 +748,7 @@ DWORD WINAPI clientHandler(LPVOID lpParam) {
                     break;
                 }
             }
-           
+
             _tcscpy_s(response.content, 256, _T("Disconnected successfully."));
             TCHAR broadcastMsg[256];
             _stprintf_s(broadcastMsg, 256, _T("User %s has left the game!"), msg.sender);
@@ -803,21 +806,21 @@ DWORD WINAPI clientHandler(LPVOID lpParam) {
             {
                 _stprintf_s(response.content, 256, _T("\nYour guess was incorrect"));
             }
-                for (int j = 0; j < cdata->sharedMem->playerCount ; j++)
-                {
-                    if (cdata->sharedMem->currentLeaderPoints < cdata->sharedMem->playerList[j].points) {
-                       if (_tcscmp(cdata->sharedMem->currentLeader, msg.sender) != 0) {
-                            _tcscpy_s(cdata->sharedMem->currentLeader, MAX_NAME_LENGTH, msg.sender);
-                            cdata->sharedMem->currentLeaderPoints = cdata->sharedMem->playerList[j].points;
+            for (int j = 0; j < cdata->sharedMem->playerCount; j++)
+            {
+                if (cdata->sharedMem->currentLeaderPoints < cdata->sharedMem->playerList[j].points) {
+                    if (_tcscmp(cdata->sharedMem->currentLeader, msg.sender) != 0) {
+                        _tcscpy_s(cdata->sharedMem->currentLeader, MAX_NAME_LENGTH, msg.sender);
+                        cdata->sharedMem->currentLeaderPoints = cdata->sharedMem->playerList[j].points;
 
-                            TCHAR leaderMsg[256];
-                            _stprintf_s(leaderMsg, 256, _T("User  %s is now leading with %d points!"),
-                                msg.sender, cdata->sharedMem->playerList[j].points);
-                            broadcastMaker(cdata, leaderMsg);
-                            break;
-                        }
+                        TCHAR leaderMsg[256];
+                        _stprintf_s(leaderMsg, 256, _T("User  %s is now leading with %d points!"),
+                            msg.sender, cdata->sharedMem->playerList[j].points);
+                        broadcastMaker(cdata, leaderMsg);
+                        break;
                     }
                 }
+            }
             pointsGiven = 0;
             break;
         }
@@ -943,7 +946,7 @@ int _tmain(int argc, TCHAR* argv[]) {
 
     WaitForMultipleObjects(3, hThreads, TRUE, INFINITE);
 
-    for (int i = 0; i <3; i++) {
+    for (int i = 0; i < 3; i++) {
         CloseHandle(hThreads[i]);
     }
 

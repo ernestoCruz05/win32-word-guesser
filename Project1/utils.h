@@ -27,6 +27,7 @@
 #define STATE_MUTEX_NAME _T("STATE_MUTEX")
 
 #define PIPE_NAME _T("\\\\.\\pipe\\SO2")
+#define BROAD_PIPE  _T("\\\\.\\pipe\\broad")
 #define PIPE_BUFFER_SIZE 512
 
 #define MSG_REGISTER	1
@@ -41,6 +42,7 @@
 typedef struct
 {
 	HANDLE hPipe;
+	HANDLE bPipe;
 	TCHAR name[20];
 	int points;
 	int active;
@@ -87,6 +89,7 @@ typedef struct
 
 typedef struct {
 	HANDLE pipe;
+	HANDLE bpipe;
 	GameControlData* cdata;
 } PipeClientContext;
 

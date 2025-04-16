@@ -111,7 +111,7 @@ DWORD WINAPI LetterUpdateThread(GameControlData* cdata)
             memcpy(ll, cdata->sharedMem->displayedLetters, MAXLETRAS);
             UpdateLetters(cdata);
         }
-        ReleaseMutex(cdata->hGameMutex);    
+        ReleaseMutex(cdata->hGameMutex);
         Sleep(200);
     }
     return 0;
@@ -127,7 +127,7 @@ BOOL ReceiveOverseerResponse(GAME_MESSAGE* response) {
 
     if (!ReadFile(hPipe, response, sizeof(GAME_MESSAGE), &bytesRead, &ov)) {
         if (GetLastError() == ERROR_IO_PENDING) {
-            WaitForSingleObject(ov.hEvent, INFINITE); 
+            WaitForSingleObject(ov.hEvent, INFINITE);
             GetOverlappedResult(hPipe, &ov, &bytesRead, FALSE);
         }
         else {
@@ -150,7 +150,7 @@ BOOL ConnectToGame(TCHAR* name)
         FILE_SHARE_READ | FILE_SHARE_WRITE,
         NULL,
         OPEN_EXISTING,
-        FILE_FLAG_OVERLAPPED, 
+        FILE_FLAG_OVERLAPPED,
         NULL
     );
 
@@ -159,7 +159,7 @@ BOOL ConnectToGame(TCHAR* name)
     SetNamedPipeHandleState(hPipe, &mode, NULL, NULL);
 
     GAME_MESSAGE gX;
-    _tcscpy_s(gX.sender,256 ,  name);
+    _tcscpy_s(gX.sender, 256, name);
     gX.msgType = MSG_REGISTER;
     _tcscpy_s(gX.content, 256, _T(""));
 
@@ -243,7 +243,7 @@ int _tmain(int argc, TCHAR* argv[]) {
 
     TCHAR name[32];
     _tprintf(_T("Type your username: "));
-    _tscanf_s(_T("%s"), name,(unsigned)_countof(name));
+    _tscanf_s(_T("%s"), name, (unsigned)_countof(name));
     system("cls");
     ConnectToGame(name);
 
@@ -279,13 +279,13 @@ int _tmain(int argc, TCHAR* argv[]) {
 
 
 
-   HANDLE hThread = CreateThread(NULL, 0, LetterUpdateThread, &cdata, 0, NULL);
-   HANDLE bThread = CreateThread(NULL, 0, broadcastListener, &cdata, 0, NULL);
+    HANDLE hThread = CreateThread(NULL, 0, LetterUpdateThread, &cdata, 0, NULL);
+    HANDLE bThread = CreateThread(NULL, 0, broadcastListener, &cdata, 0, NULL);
 
-   if (bThread == NULL) {
-       _tprintf(_T("Failed to create broadcast listener thread!\n"));
-       return 1;
-   }
+    if (bThread == NULL) {
+        _tprintf(_T("Failed to create broadcast listener thread!\n"));
+        return 1;
+    }
 
     TCHAR input[MAX_WORD_LENGTH] = { 0 };
     int inputLen = 0;
