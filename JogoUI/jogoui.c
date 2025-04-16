@@ -111,7 +111,7 @@ DWORD WINAPI LetterUpdateThread(GameControlData* cdata)
             memcpy(ll, cdata->sharedMem->displayedLetters, MAXLETRAS);
             UpdateLetters(cdata);
         }
-        ReleaseMutex(cdata->hGameMutex);    
+        ReleaseMutex(cdata->hGameMutex);
         Sleep(200);
     }
     return 0;
@@ -127,7 +127,7 @@ BOOL ReceiveOverseerResponse(GAME_MESSAGE* response) {
 
     if (!ReadFile(hPipe, response, sizeof(GAME_MESSAGE), &bytesRead, &ov)) {
         if (GetLastError() == ERROR_IO_PENDING) {
-            WaitForSingleObject(ov.hEvent, INFINITE); 
+            WaitForSingleObject(ov.hEvent, INFINITE);
             GetOverlappedResult(hPipe, &ov, &bytesRead, FALSE);
         }
         else {
@@ -150,7 +150,7 @@ BOOL ConnectToGame(TCHAR* name)
         FILE_SHARE_READ | FILE_SHARE_WRITE,
         NULL,
         OPEN_EXISTING,
-        FILE_FLAG_OVERLAPPED, 
+        FILE_FLAG_OVERLAPPED,
         NULL
     );
 
@@ -159,7 +159,7 @@ BOOL ConnectToGame(TCHAR* name)
     SetNamedPipeHandleState(hPipe, &mode, NULL, NULL);
 
     GAME_MESSAGE gX;
-    _tcscpy_s(gX.sender,256 ,  name);
+    _tcscpy_s(gX.sender, 256, name);
     gX.msgType = MSG_REGISTER;
     _tcscpy_s(gX.content, 256, _T(""));
 
@@ -196,11 +196,32 @@ BOOL sendMessageOverseer(GAME_MESSAGE msg)
 
 DWORD WINAPI broadcastListener(LPVOID lpParam) {
     GAME_MESSAGE msg;
-    CONSOLE_SCREEN_BUFFER_INFO csbi;
-    COORD savedCursor;
+    OVERLAPPED ov = { 0 };
+    ov.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
 
     while (1) {
-        if (ReceiveOverseerResponse(&msg)) {
+        DWORD bytesRead;
+        BOOL success = ReadFile(hPipe, &msg, sizeof(GAME_MESSAGE), &bytesRead, &ov);
+
+        if (!success) {
+            DWORD err = GetLastError();
+            if (err == ERROR_IO_PENDING) {
+                WaitForSingleObject(ov.hEvent, INFINITE);
+                GetOverlappedResult(hPipe, &ov, &bytesRead, FALSE);
+                success = TRUE;
+            }
+            else if (err == ERROR_BROKEN_PIPE) {
+                _tprintf(_T("\nDisconnected from server.\n"));
+                CloseHandle(ov.hEvent);
+                exit(0);
+            }
+            else {
+                Sleep(100);
+                continue;
+            }
+        }
+
+        if (success && bytesRead > 0) {
             if (msg.msgType == MSG_BROADCAST) {
                 _tprintf(_T("\n[Broadcast] %s\n"), msg.content);
             }
@@ -208,16 +229,17 @@ DWORD WINAPI broadcastListener(LPVOID lpParam) {
                 _tprintf(_T("\n[Server] %s\n"), msg.content);
             }
             else if (msg.msgType == MSG_KICK) {
+                system("cls");
                 _tprintf(_T("\n[Server] %s\n"), msg.content);
-                _tprintf(_T("\nPress any key to exit...\n"));
-                _getch();
-                exit(0); 
+                CloseHandle(ov.hEvent);
+                exit(0);
             }
         }
-        else {
-            Sleep(500);
-        }
+
+        ResetEvent(ov.hEvent);
     }
+
+    CloseHandle(ov.hEvent);
     return 0;
 }
 
@@ -238,7 +260,7 @@ int _tmain(int argc, TCHAR* argv[]) {
 
     TCHAR name[32];
     _tprintf(_T("Type your username: "));
-    _tscanf_s(_T("%s"), name,(unsigned)_countof(name));
+    _tscanf_s(_T("%s"), name, (unsigned)_countof(name));
     system("cls");
     ConnectToGame(name);
 
@@ -274,19 +296,20 @@ int _tmain(int argc, TCHAR* argv[]) {
 
 
 
-   HANDLE hThread = CreateThread(NULL, 0, LetterUpdateThread, &cdata, 0, NULL);
-   HANDLE bThread = CreateThread(NULL, 0, broadcastListener, &cdata, 0, NULL);
+    HANDLE hThread = CreateThread(NULL, 0, LetterUpdateThread, &cdata, 0, NULL);
+    HANDLE bThread = CreateThread(NULL, 0, broadcastListener, &cdata, 0, NULL);
 
-   if (bThread == NULL) {
-       _tprintf(_T("Failed to create broadcast listener thread!\n"));
-       return 1;
-   }
+    if (bThread == NULL) {
+        _tprintf(_T("Failed to create broadcast listener thread!\n"));
+        return 1;
+    }
 
     TCHAR input[MAX_WORD_LENGTH] = { 0 };
     int inputLen = 0;
 
 
     while (1) {
+
         for (int i = 0; i < 3; i++) {
             SetConsoleCursorPosition(hConsole, (COORD) { 0, INPUT_START_Y + i });
             _tprintf(_T("                                                                                "));
@@ -312,15 +335,6 @@ int _tmain(int argc, TCHAR* argv[]) {
                 break;
             }
             else if (_tcscmp(input, _T(":pont")) == 0) {
-                WaitForSingleObject(cdata.hGameMutex, INFINITE);
-                BOOL isRunning = cdata.sharedMem->running;
-                ReleaseMutex(cdata.hGameMutex);
-
-                if (!isRunning) {
-                    _tprintf(_T("\n[Server] Game is not running. Wait for more players.\n"));
-                    continue;
-                }
-
                 GAME_MESSAGE msg;
                 _tcscpy_s(msg.sender, MAX_NAME_LENGTH, name);
                 msg.msgType = MSG_COMMAND;
@@ -328,15 +342,6 @@ int _tmain(int argc, TCHAR* argv[]) {
                 sendMessageOverseer(msg);
             }
             else if (_tcscmp(input, _T(":jogs")) == 0) {
-                WaitForSingleObject(cdata.hGameMutex, INFINITE);
-                BOOL isRunning = cdata.sharedMem->running;
-                ReleaseMutex(cdata.hGameMutex);
-
-                if (!isRunning) {
-                    _tprintf(_T("\n[Server] Game is not running. Wait for more players.\n"));
-                    continue;
-                }
-
                 GAME_MESSAGE msg;
                 _tcscpy_s(msg.sender, MAX_NAME_LENGTH, name);
                 msg.msgType = MSG_COMMAND;
@@ -348,15 +353,6 @@ int _tmain(int argc, TCHAR* argv[]) {
             }
         }
         else {
-            WaitForSingleObject(cdata.hGameMutex, INFINITE);
-            BOOL isRunning = cdata.sharedMem->running;
-            ReleaseMutex(cdata.hGameMutex);
-
-            if (!isRunning) {
-                _tprintf(_T("\n[Server] Game is not running. Wait for more players.\n"));
-                continue;
-            }
-
             GAME_MESSAGE guess;
             _tcscpy_s(guess.sender, MAX_NAME_LENGTH, name);
             _tcscpy_s(guess.content, 256, input);

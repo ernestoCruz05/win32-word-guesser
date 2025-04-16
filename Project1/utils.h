@@ -24,6 +24,7 @@
 #define COMMAND_MUTEX_NAME _T("COMMAND_MUTEX")
 #define SEM_EMPTY_POS_LETTER _T("SEM_LETTER")
 #define SEM_PLAYER_CONT _T("PLAYER_CONTROL")
+#define STATE_MUTEX_NAME _T("STATE_MUTEX")
 
 #define PIPE_NAME _T("\\\\.\\pipe\\SO2")
 #define PIPE_BUFFER_SIZE 512
@@ -61,6 +62,8 @@ typedef struct
 	int playerCount;
 	PLAYER playerList[MAX_PLAYERS];
 	int running;					// 1-> The game is running (i.e 1 or more players are connected), 0-> game is stopped
+	int currentLeaderPoints;
+	TCHAR currentLeader[25];
 } GameSharedMem;
 
 typedef struct
@@ -79,6 +82,7 @@ typedef struct
 	HANDLE hLetterSemaphore;
 	HANDLE hPlayerSemaphore;
 	HANDLE hCommandMutex;
+	HANDLE hStateMutex;
 } GameControlData;
 
 typedef struct {
