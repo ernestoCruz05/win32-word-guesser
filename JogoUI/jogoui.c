@@ -111,7 +111,7 @@ DWORD WINAPI LetterUpdateThread(GameControlData* cdata)
             memcpy(ll, cdata->sharedMem->displayedLetters, MAXLETRAS);
             UpdateLetters(cdata);
         }
-        ReleaseMutex(cdata->hGameMutex);
+        ReleaseMutex(cdata->hGameMutex);    
         Sleep(200);
     }
     return 0;
@@ -122,11 +122,23 @@ BOOL ReceiveOverseerResponse(GAME_MESSAGE* response) {
     if (hPipe == INVALID_HANDLE_VALUE) return FALSE;
 
     DWORD bytesRead;
-    if (ReadFile(hPipe, response, sizeof(GAME_MESSAGE), &bytesRead, NULL) && bytesRead > 0) {
-        return TRUE;
+    OVERLAPPED ov = { 0 };
+    ov.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+
+    if (!ReadFile(hPipe, response, sizeof(GAME_MESSAGE), &bytesRead, &ov)) {
+        if (GetLastError() == ERROR_IO_PENDING) {
+            WaitForSingleObject(ov.hEvent, INFINITE); 
+            GetOverlappedResult(hPipe, &ov, &bytesRead, FALSE);
+        }
+        else {
+            CloseHandle(ov.hEvent);
+            return FALSE;
+        }
     }
-    return FALSE;
+    CloseHandle(ov.hEvent);
+    return (bytesRead > 0);
 }
+
 
 BOOL ConnectToGame(TCHAR* name)
 {
@@ -135,15 +147,19 @@ BOOL ConnectToGame(TCHAR* name)
     hPipe = CreateFile(
         PIPE_NAME,
         GENERIC_READ | GENERIC_WRITE,
-        0,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
         NULL,
         OPEN_EXISTING,
-        1000,
+        FILE_FLAG_OVERLAPPED, 
         NULL
     );
 
+
+    DWORD mode = PIPE_READMODE_MESSAGE | PIPE_NOWAIT;
+    SetNamedPipeHandleState(hPipe, &mode, NULL, NULL);
+
     GAME_MESSAGE gX;
-    _tcscpy_s(gX.sender, 256, name);
+    _tcscpy_s(gX.sender,256 ,  name);
     gX.msgType = MSG_REGISTER;
     _tcscpy_s(gX.content, 256, _T(""));
 
@@ -165,18 +181,6 @@ BOOL ConnectToGame(TCHAR* name)
 
 BOOL sendMessageOverseer(GAME_MESSAGE msg)
 {
-
-    WaitNamedPipe(PIPE_NAME, NMPWAIT_WAIT_FOREVER);
-
-    hPipe = CreateFile(
-        PIPE_NAME,
-        GENERIC_READ | GENERIC_WRITE,
-        0,
-        NULL,
-        OPEN_EXISTING,
-        1000,
-        NULL
-    );
 
     if (hPipe == INVALID_HANDLE_VALUE)
     {
@@ -201,15 +205,13 @@ DWORD WINAPI broadcastListener(LPVOID lpParam) {
                 _tprintf(_T("\n[Broadcast] %s\n"), msg.content);
             }
             else if (msg.msgType == MSG_RESPONSE) {
-
                 _tprintf(_T("\n[Server] %s\n"), msg.content);
             }
             else if (msg.msgType == MSG_KICK) {
-                system("cls");
                 _tprintf(_T("\n[Server] %s\n"), msg.content);
                 _tprintf(_T("\nPress any key to exit...\n"));
                 _getch();
-                exit(0);
+                exit(0); 
             }
         }
         else {
@@ -236,11 +238,9 @@ int _tmain(int argc, TCHAR* argv[]) {
 
     TCHAR name[32];
     _tprintf(_T("Type your username: "));
-    _tscanf_s(_T("%s"), name, (unsigned)_countof(name));
+    _tscanf_s(_T("%s"), name,(unsigned)_countof(name));
     system("cls");
     ConnectToGame(name);
-
-
 
 
 
@@ -274,8 +274,13 @@ int _tmain(int argc, TCHAR* argv[]) {
 
 
 
-    HANDLE hThread = CreateThread(NULL, 0, LetterUpdateThread, &cdata, 0, NULL);
-    HANDLE bThread = CreateThread(NULL, 0, broadcastListener, NULL, 0, NULL);
+   HANDLE hThread = CreateThread(NULL, 0, LetterUpdateThread, &cdata, 0, NULL);
+   HANDLE bThread = CreateThread(NULL, 0, broadcastListener, &cdata, 0, NULL);
+
+   if (bThread == NULL) {
+       _tprintf(_T("Failed to create broadcast listener thread!\n"));
+       return 1;
+   }
 
     TCHAR input[MAX_WORD_LENGTH] = { 0 };
     int inputLen = 0;

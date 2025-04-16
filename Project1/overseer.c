@@ -610,13 +610,144 @@ void processCommand(TCHAR* command, GameControlData* cdata) {
     }
 }
 
+DWORD WINAPI clientHandler(LPVOID lpParam) {
+    PipeClientContext* ctx = (PipeClientContext*)lpParam;
+    HANDLE hPipe = ctx->pipe;
+    GameControlData* cdata = ctx->cdata;
 
-DWORD WINAPI pipeCreator(LPVOID pArguments)
-{
+    GAME_MESSAGE msg;
+    DWORD bytesR;
+
+    while (ReadFile(hPipe, &msg, sizeof(GAME_MESSAGE), &bytesR, NULL) && bytesR > 0) {
+        WaitForSingleObject(cdata->hGameMutex, INFINITE);
+
+        GAME_MESSAGE response;
+        _tcscpy_s(response.sender, MAX_NAME_LENGTH, _T("SERVER"));
+        response.msgType = MSG_RESPONSE;
+        _tcscpy_s(response.content, 256, _T(""));
+
+        switch (msg.msgType) {
+        case MSG_REGISTER: {
+            int idx = cdata->sharedMem->playerCount++;
+            _tcscpy_s(cdata->sharedMem->playerList[idx].name, MAX_NAME_LENGTH, msg.sender);
+            cdata->sharedMem->playerList[idx].points = 0;
+            cdata->sharedMem->playerList[idx].active = 1;
+            cdata->sharedMem->playerList[idx].hPipe = hPipe;
+            _stprintf_s(response.content, 256, _T("Welcome %s!"), msg.sender);
+            break;
+        }
+        case MSG_COMMAND: {
+            if (_tcscmp(msg.content, _T(":pont")) == 0) {
+                for (int i = 0; i < cdata->sharedMem->playerCount; i++) {
+                    if (_tcscmp(cdata->sharedMem->playerList[i].name, msg.sender) == 0) {
+                        _stprintf_s(response.content, 256, _T("Your current score is %d."),
+                            cdata->sharedMem->playerList[i].points);
+                        break;
+                    }
+                }
+            }
+            else if (_tcscmp(msg.content, _T(":jogs")) == 0) {
+                TCHAR buffer[256] = _T("Leaderboard:\n");
+                for (int i = 0; i < cdata->sharedMem->playerCount; i++) {
+                    if (cdata->sharedMem->playerList[i].active) {
+                        TCHAR line[64];
+                        _stprintf_s(line, 64, _T("- %s: %d pts\n"),
+                            cdata->sharedMem->playerList[i].name,
+                            cdata->sharedMem->playerList[i].points);
+                        _tcscat_s(buffer, 256, line);
+                    }
+                }
+                _tcscpy_s(response.content, 256, buffer);
+            }
+            else {
+                _tcscpy_s(response.content, 256, _T("Unknown command."));
+            }
+            break;
+        }
+        case MSG_DISCONNECT: {
+            for (int i = 0; i < cdata->sharedMem->playerCount; i++) {
+                if (_tcscmp(cdata->sharedMem->playerList[i].name, msg.sender) == 0) {
+                    cdata->sharedMem->playerList[i].active = 0;
+                    cdata->sharedMem->playerList[i].hPipe = NULL;
+                    break;
+                }
+            }
+           
+            _tcscpy_s(response.content, 256, _T("Disconnected successfully."));
+            GAME_MESSAGE response_copy = response;
+
+            ReleaseMutex(cdata->hGameMutex);
+
+            WriteFile(hPipe, &response_copy, sizeof(GAME_MESSAGE), &bytesR, NULL);
+            break;
+        }
+        case MSG_GUESS:
+        {
+            int pointsGiven = 0;
+            int valid = validateGuess(msg.content);
+            if (valid)
+            {
+                for (int i = 0; i < cdata->sharedMem->playerCount; i++)
+                {
+                    if (_tcscmp(cdata->sharedMem->playerList[i].name, msg.sender) == 0) {
+                        pointsGiven = _tcslen(msg.content) * 1.5;
+                        cdata->sharedMem->playerList[i].points += pointsGiven;
+                        break;
+                    }
+                }
+            }
+            else if (!valid)
+            {
+                for (int i = 0; i < cdata->sharedMem->playerCount; i++)
+                {
+                    if (_tcscmp(cdata->sharedMem->playerList[i].name, msg.sender) == 0) {
+                        pointsGiven = _tcslen(msg.content) * 0.5;
+                        if (cdata->sharedMem->playerList[i].points < pointsGiven)
+                        {
+                            cdata->sharedMem->playerList[i].points = 0;
+                        }
+                        else
+                        {
+                            cdata->sharedMem->playerList[i].points -= pointsGiven;
+
+                        }
+                        break;
+                    }
+                }
+            }
+            response.msgType = MSG_RESPONSE;
+            if (valid)
+            {
+                _stprintf_s(response.content, 256, _T(""));
+                TCHAR broadcastMsg[256];
+                _stprintf_s(broadcastMsg, 256, _T("User %s guessed correctly and was awarded %d points. Word: %s!"), msg.sender, pointsGiven, msg.content);
+                broadcastMaker(cdata, broadcastMsg);
+            }
+            else if (!valid)
+            {
+                _stprintf_s(response.content, 256, _T("\nYour guess was incorrect"), msg.content, valid);
+            }
+            pointsGiven = 0;
+            break;
+        }
+        }
+
+        GAME_MESSAGE response_copy = response;
+
+        ReleaseMutex(cdata->hGameMutex);
+
+        WriteFile(hPipe, &response_copy, sizeof(GAME_MESSAGE), &bytesR, NULL);
+    }
+
+    CloseHandle(hPipe);
+    free(ctx);
+    return 0;
+}
+
+DWORD WINAPI pipeCreator(LPVOID pArguments) {
     GameControlData* cdata = (GameControlData*)pArguments;
 
-    while (cdata->shouldContinue)
-    {
+    while (1) {
         HANDLE hPipe = CreateNamedPipe(
             PIPE_NAME,
             PIPE_ACCESS_DUPLEX,
@@ -624,218 +755,31 @@ DWORD WINAPI pipeCreator(LPVOID pArguments)
             MAX_PLAYERS,
             sizeof(GAME_MESSAGE),
             sizeof(GAME_MESSAGE),
-            1000,
+            0,
             NULL
         );
 
-
-        if (hPipe == INVALID_HANDLE_VALUE)
-        {
+        if (hPipe == INVALID_HANDLE_VALUE) {
             _tprintf(_T("Error creating named pipe: %d\n"), GetLastError());
-            exit(-1);
+            continue;
         }
 
-        BOOL connected = ConnectNamedPipe(hPipe, NULL) ? TRUE : (GetLastError() == ERROR_PIPE_CONNECTED);
-
+        BOOL connected = ConnectNamedPipe(hPipe, NULL) || GetLastError() == ERROR_PIPE_CONNECTED;
         if (connected) {
-            GAME_MESSAGE msg;
-            DWORD bytesR;
-            BOOL reading = ReadFile(
-                hPipe,
-                &msg,
-                sizeof(GAME_MESSAGE),
-                &bytesR,
-                NULL
-            );
-
-            if (reading && bytesR > 0)
-            {
-                BOOL isStillValid = FALSE;
-                for (int i = 0; i < MAX_PLAYERS; i++) {
-                    if (_tcscmp(cdata->sharedMem->playerList[i].name, msg.sender) == 0 &&
-                        cdata->sharedMem->playerList[i].active) {
-                        isStillValid = TRUE;
-                        break;
-                    }
-                }
-
-                if (!isStillValid && msg.msgType != MSG_REGISTER) {
-                    _tprintf(_T("Blocked message from kicked or inactive player: %s\n"), msg.sender);
-                    CloseHandle(hPipe);  
-                    continue;            
-                }
-
-                WaitForSingleObject(cdata->hGameMutex, INFINITE);
-
-                GAME_MESSAGE response;
-                _tcscpy_s(response.sender, MAX_NAME_LENGTH, _T("SERVER"));
-
-                switch (msg.msgType)
-                {
-                case MSG_REGISTER: {
-                    if (cdata->sharedMem->playerCount < MAX_PLAYERS) {
-                        int idx = cdata->sharedMem->playerCount++;
-                        _tcscpy_s(cdata->sharedMem->playerList[idx].name, MAX_NAME_LENGTH, msg.sender);
-                        cdata->sharedMem->playerList[idx].points = 0;
-                        cdata->sharedMem->playerList[idx].active = 1;
-                        cdata->sharedMem->playerList[idx].hPipe = hPipe;
-
-                        response.msgType = MSG_RESPONSE;
-                        _stprintf_s(response.content, 256, _T(""), msg.sender);
-
-                    	TCHAR broadcastMsg[256];
-                        _stprintf_s(broadcastMsg, 256, _T("User %s has entered the game!"), msg.sender);
-                        broadcastMaker(cdata, broadcastMsg);
-
-                        _tprintf(_T("New player: %s\n"), msg.sender);
-                    }
-                    else {
-                        response.msgType = MSG_RESPONSE;
-                        _tcscpy_s(response.content, 256, _T("Server full"));
-                    }
-                    break;
-                }
-
-                case MSG_GUESS:
-	                {
-						int pointsGiven = 0;
-						int valid = validateGuess(msg.content);
-                        if (valid)
-                        {
-	                        for (int i = 0 ; i < cdata->sharedMem->playerCount ; i++)
-	                        {
-                                if (_tcscmp(cdata->sharedMem->playerList[i].name, msg.sender) == 0) {
-                                    pointsGiven = _tcslen(msg.content) * 1.5;
-                                    cdata->sharedMem->playerList[i].points += pointsGiven;
-                                    break;
-                                }
-	                        }
-                        } else if (!valid)
-                        {
-                            for (int i = 0; i < cdata->sharedMem->playerCount; i++)
-                            {
-                                if (_tcscmp(cdata->sharedMem->playerList[i].name, msg.sender) == 0) {
-                                    pointsGiven = _tcslen(msg.content) * 0.5;
-                                    if (cdata->sharedMem->playerList[i].points < pointsGiven)
-                                    {
-                                        cdata->sharedMem->playerList[i].points = 0;
-                                    } else
-                                    {
-                                        cdata->sharedMem->playerList[i].points -= pointsGiven;
-
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                        response.msgType = MSG_RESPONSE;
-                        if (valid)
-                        {
-                            _stprintf_s(response.content, 256, _T(""));
-                            TCHAR broadcastMsg[256];
-                            _stprintf_s(broadcastMsg, 256, _T("User %s guessed correctly and was awarded %d points. Word: %s!"), msg.sender , pointsGiven, msg.content);
-                            broadcastMaker(cdata, broadcastMsg);
-                        } else if (!valid)
-                        {
-                            _stprintf_s(response.content, 256, _T("\nYour guess was incorrect"), msg.content, valid);
-                        }
-                        pointsGiven = 0;
-                        break;
-	                }
-                case MSG_COMMAND:
-                {
-                    response.msgType = MSG_RESPONSE;
-
-                    if (_tcscmp(msg.content, _T(":pont")) == 0) {
-                        BOOL found = FALSE;
-                        for (int i = 0; i < cdata->sharedMem->playerCount; i++) {
-                            if (_tcscmp(cdata->sharedMem->playerList[i].name, msg.sender) == 0) {
-                                _stprintf_s(response.content, 256, _T("Your current score is %d points."), cdata->sharedMem->playerList[i].points);
-                                found = TRUE;
-                                break;
-                            }
-                        }
-
-                        if (!found) {
-                            _tcscpy_s(response.content, 256, _T("Player not found - Should not be possible."));
-                        }
-                    }
-                    else if (_tcscmp(msg.content, _T(":jogs")) == 0) {
-                        TCHAR buffer[256] = _T("Leaderboard:\n");
-                        PLAYER sorted[MAX_PLAYERS];
-                        int count = 0;
-
-                        for (int i = 0; i < cdata->sharedMem->playerCount; i++) {
-                            if (cdata->sharedMem->playerList[i].active) {
-                                sorted[count++] = cdata->sharedMem->playerList[i];
-                            }
-                        }
-
-                        for (int i = 0; i < count - 1; i++) {
-                            for (int j = i + 1; j < count; j++) {
-                                if (sorted[j].points > sorted[i].points) {
-                                    PLAYER temp = sorted[i];
-                                    sorted[i] = sorted[j];
-                                    sorted[j] = temp;
-                                }
-                            }
-                        }
-
-                        for (int i = 0; i < count; i++) {
-                            TCHAR line[64];
-                            _stprintf_s(line, 64, _T("%d. %s - %d pts\n"), i + 1, sorted[i].name, sorted[i].points);
-                            _tcscat_s(buffer, 256, line);
-                        }
-
-                        _tcscpy_s(response.content, 256, buffer);
-                    }
-                    else {
-                        _tcscpy_s(response.content, 256, _T("Not a command."));
-                    }
-
-                    break;
-                }
-                case MSG_DISCONNECT: {
-                    for (int i = 0; i < cdata->sharedMem->playerCount; i++) {
-                        if (_tcscmp(cdata->sharedMem->playerList[i].name, msg.sender) == 0) {
-                            cdata->sharedMem->playerList[i].active = 0;
-
-                            if (cdata->sharedMem->playerList[i].hPipe != NULL) {
-                                CloseHandle(cdata->sharedMem->playerList[i].hPipe);
-                                cdata->sharedMem->playerList[i].hPipe = NULL;
-                            }
-
-                            _tprintf(_T("Player %s disconnected\n"), msg.sender);
-                            cdata->sharedMem->playerCount--;
-                            TCHAR leaveMsg[256];
-                            _stprintf_s(leaveMsg, 256, _T("%s has left the game."), msg.sender);
-                            broadcastMaker(cdata, leaveMsg);
-
-                            break;
-                        }
-                    }
-
-                    response.msgType = MSG_RESPONSE;
-                    _tcscpy_s(response.content, 256, _T("Disconnected successfully."));
-                    break;
-                }
-
-                    break;
-                }
-                _tprintf(_T("[DEBUG] Final response before send: type=%d, content='%s'\n"),
-                    response.msgType, response.content);
-                WriteFile(hPipe, &response, sizeof(GAME_MESSAGE), &bytesR, NULL);
-                ReleaseMutex(cdata->hGameMutex);
-            } else
-            {
-                CloseHandle(hPipe);
-            }
-
+            PipeClientContext* ctx = (PipeClientContext*)malloc(sizeof(PipeClientContext));
+            ctx->pipe = hPipe;
+            ctx->cdata = cdata;
+            CreateThread(NULL, 0, clientHandler, ctx, 0, NULL);
         }
-
+        else {
+            CloseHandle(hPipe);
+        }
     }
     return 0;
 }
+
+
+
 
 int _tmain(int argc, TCHAR* argv[]) {
 #ifdef UNICODE

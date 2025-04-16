@@ -81,6 +81,9 @@ typedef struct
 	HANDLE hCommandMutex;
 } GameControlData;
 
-
+typedef struct {
+	HANDLE pipe;
+	GameControlData* cdata;
+} PipeClientContext;
 
 #endif 
