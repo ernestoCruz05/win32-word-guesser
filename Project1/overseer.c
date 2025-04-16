@@ -173,6 +173,7 @@ BOOL initResources(GameControlData* cdata)
         MAXLETRAS,
         SEM_EMPTY_POS_LETTER
     );
+    cdata->hStateMutex = CreateMutex(NULL, FALSE, STATE_MUTEX_NAME);
 
     WaitForSingleObject(cdata->hGameMutex, INFINITE);
     memset(cdata->sharedMem->letters, '_', MAXLETRAS);
@@ -180,7 +181,9 @@ BOOL initResources(GameControlData* cdata)
     memset(cdata->sharedMem->letterInfo, 0, sizeof(int) * MAXLETRAS * 2);
     cdata->sharedMem->playerCount = 0;
     cdata->sharedMem->running = 0;
-    ReleaseMutex(cdata->hGameMutex);
+    cdata->sharedMem->currentLeaderPoints = 0;
+    _tcscpy_s(cdata->sharedMem->currentLeader, MAX_NAME_LENGTH, _T(""));
+	ReleaseMutex(cdata->hGameMutex);
 
     cdata->shouldContinue = 1;
 
@@ -248,33 +251,42 @@ DWORD WINAPI GeraLetrasThread(LPVOID pArguments) {
     int cont = 0;
 
     while (1) {
-        Sleep(RITMO);
+        if (cdata->shouldContinue)
+        {
+            Sleep(RITMO);
 
 
-        for (int i = 0; i < MAXLETRAS; i++) {
-            if (abcR[i] == '_') {
-                createLetter(i);
+            for (int i = 0; i < MAXLETRAS; i++) {
+                if (abcR[i] == '_') {
+                    createLetter(i);
+                    copyData(cdata);
+                    cont = 0;
+                }
+                else {
+                    cont++;
+                }
+            }
+
+            if (cont == MAXLETRAS) {
+                removeOldest();
+                createLetter(MAXLETRAS - 1);
                 copyData(cdata);
-                cont = 0;
             }
-            else {
-                cont++;
-            }
+
+            //printABCRDisplay();
+            //escreveABCR();
+            cont = 0;
+            ReleaseSemaphore(cdata->hLetterSemaphore, 1, NULL);
+            ReleaseMutex(cdata->hGameMutex);
+        }
+        else
+        {
+            Sleep(500);
         }
 
-        if (cont == MAXLETRAS) {
-            removeOldest();
-            createLetter(MAXLETRAS - 1);
-            copyData(cdata);
-        }
-
-        //printABCRDisplay();
-        //escreveABCR();
-        cont = 0;
-        ReleaseSemaphore(cdata->hLetterSemaphore, 1, NULL);
-        ReleaseMutex(cdata->hGameMutex);
     }
     return 0;
+
 }
 
 void countLetters(char* arr, int* count) {
@@ -382,19 +394,26 @@ int validateGuess(TCHAR* guess) {
     return 1;
 }
 
-DWORD WINAPI GuessValidationThread(void* pArguments) {
+DWORD WINAPI GuessValidationThread(LPVOID pArguments) {
+    GameControlData* cdata = (GameControlData*)pArguments;
     while (1) {
-        WaitForSingleObject(hSemaphore, INFINITE);
+        if (cdata->shouldContinue)
+        {
+            WaitForSingleObject(hSemaphore, INFINITE);
 
-        WaitForSingleObject(hMutex, INFINITE);
+            WaitForSingleObject(hMutex, INFINITE);
 
-        TCHAR currentWord[MAX_WORD_LENGTH];
-        _tcscpy_s(currentWord, MAX_WORD_LENGTH, wordBuffer[bufferStart]);
-        bufferStart = (bufferStart + 1) % BUFFER_SIZE;
+            TCHAR currentWord[MAX_WORD_LENGTH];
+            _tcscpy_s(currentWord, MAX_WORD_LENGTH, wordBuffer[bufferStart]);
+            bufferStart = (bufferStart + 1) % BUFFER_SIZE;
 
-        ReleaseMutex(hMutex);
+            ReleaseMutex(hMutex);
 
-        validateGuess(currentWord);
+            validateGuess(currentWord);
+        } else
+        {
+            Sleep(500);
+        }
     }
     return 0;
 }
@@ -619,7 +638,6 @@ DWORD WINAPI clientHandler(LPVOID lpParam) {
     DWORD bytesR;
 
     while (ReadFile(hPipe, &msg, sizeof(GAME_MESSAGE), &bytesR, NULL) && bytesR > 0) {
-        WaitForSingleObject(cdata->hGameMutex, INFINITE);
 
         GAME_MESSAGE response;
         _tcscpy_s(response.sender, MAX_NAME_LENGTH, _T("SERVER"));
@@ -628,12 +646,49 @@ DWORD WINAPI clientHandler(LPVOID lpParam) {
 
         switch (msg.msgType) {
         case MSG_REGISTER: {
+            BOOL usernameTaken = FALSE;
+            WaitForSingleObject(cdata->hGameMutex, INFINITE); 
+            for (int i = 0; i < cdata->sharedMem->playerCount; i++) {
+                if (_tcscmp(cdata->sharedMem->playerList[i].name, msg.sender) == 0) {
+                    usernameTaken = TRUE;
+                    break;
+                }
+            }
+
+            if (usernameTaken)
+            {
+                GAME_MESSAGE response;
+                response.msgType = MSG_KICK;
+                _tcscpy_s(response.sender, MAX_NAME_LENGTH, _T("SERVER"));
+                _tcscpy_s(response.content, 256, _T("Username already taken. Retry with a different username"));
+
+
+                ReleaseMutex(cdata->hGameMutex);
+                DWORD bytesW;
+                WriteFile(hPipe, &response, sizeof(GAME_MESSAGE), &bytesW, NULL);
+
+                CloseHandle(hPipe); 
+                free(ctx);
+                return 0;
+            }
+
+            if (cdata->sharedMem->playerCount > 1) {
+                WaitForSingleObject(cdata->hGameMutex, INFINITE);
+                WaitForSingleObject(cdata->hStateMutex, INFINITE);
+                cdata->shouldContinue = 1;
+                ReleaseMutex(cdata->hStateMutex);
+                ReleaseMutex(cdata->hGameMutex);
+            }
+
             int idx = cdata->sharedMem->playerCount++;
             _tcscpy_s(cdata->sharedMem->playerList[idx].name, MAX_NAME_LENGTH, msg.sender);
             cdata->sharedMem->playerList[idx].points = 0;
             cdata->sharedMem->playerList[idx].active = 1;
             cdata->sharedMem->playerList[idx].hPipe = hPipe;
             _stprintf_s(response.content, 256, _T("Welcome %s!"), msg.sender);
+
+
+
             break;
         }
         case MSG_COMMAND: {
@@ -647,18 +702,36 @@ DWORD WINAPI clientHandler(LPVOID lpParam) {
                 }
             }
             else if (_tcscmp(msg.content, _T(":jogs")) == 0) {
-                TCHAR buffer[256] = _T("Leaderboard:\n");
+                PLAYER sorted[MAX_PLAYERS];
+                int count = 0;
+
                 for (int i = 0; i < cdata->sharedMem->playerCount; i++) {
                     if (cdata->sharedMem->playerList[i].active) {
-                        TCHAR line[64];
-                        _stprintf_s(line, 64, _T("- %s: %d pts\n"),
-                            cdata->sharedMem->playerList[i].name,
-                            cdata->sharedMem->playerList[i].points);
-                        _tcscat_s(buffer, 256, line);
+                        sorted[count++] = cdata->sharedMem->playerList[i];
                     }
                 }
+
+                for (int i = 0; i < count - 1; i++) {
+                    for (int j = i + 1; j < count; j++) {
+                        if (sorted[j].points > sorted[i].points) {
+                            PLAYER temp = sorted[i];
+                            sorted[i] = sorted[j];
+                            sorted[j] = temp;
+                        }
+                    }
+                }
+
+                TCHAR buffer[256] = _T("Leaderboard:\n");
+                for (int i = 0; i < count; i++) {
+                    TCHAR line[64];
+                    _stprintf_s(line, 64, _T("%d. %s - %d pts\n"),
+                        i + 1, sorted[i].name, sorted[i].points);
+                    _tcscat_s(buffer, 256, line);
+                }
+
                 _tcscpy_s(response.content, 256, buffer);
             }
+
             else {
                 _tcscpy_s(response.content, 256, _T("Unknown command."));
             }
@@ -674,6 +747,9 @@ DWORD WINAPI clientHandler(LPVOID lpParam) {
             }
            
             _tcscpy_s(response.content, 256, _T("Disconnected successfully."));
+            TCHAR broadcastMsg[256];
+            _stprintf_s(broadcastMsg, 256, _T("User %s has left the game!"), msg.sender);
+            broadcastMaker(cdata, broadcastMsg);
             GAME_MESSAGE response_copy = response;
 
             ReleaseMutex(cdata->hGameMutex);
@@ -725,8 +801,23 @@ DWORD WINAPI clientHandler(LPVOID lpParam) {
             }
             else if (!valid)
             {
-                _stprintf_s(response.content, 256, _T("\nYour guess was incorrect"), msg.content, valid);
+                _stprintf_s(response.content, 256, _T("\nYour guess was incorrect"));
             }
+                for (int j = 0; j < cdata->sharedMem->playerCount ; j++)
+                {
+                    if (cdata->sharedMem->currentLeaderPoints < cdata->sharedMem->playerList[j].points) {
+                       if (_tcscmp(cdata->sharedMem->currentLeader, msg.sender) != 0) {
+                            _tcscpy_s(cdata->sharedMem->currentLeader, MAX_NAME_LENGTH, msg.sender);
+                            cdata->sharedMem->currentLeaderPoints = cdata->sharedMem->playerList[j].points;
+
+                            TCHAR leaderMsg[256];
+                            _stprintf_s(leaderMsg, 256, _T("User  %s is now leading with %d points!"),
+                                msg.sender, cdata->sharedMem->playerList[j].points);
+                            broadcastMaker(cdata, leaderMsg);
+                            break;
+                        }
+                    }
+                }
             pointsGiven = 0;
             break;
         }
@@ -798,7 +889,7 @@ int _tmain(int argc, TCHAR* argv[]) {
         _tprintf(_T("Failed to initialize resources\n"));
         return 1;
     }
-
+    cdata.shouldContinue = 0;
     hMutex = CreateMutex(NULL, FALSE, NULL);
     if (hMutex == NULL) {
         _tprintf(_T("Error creating mutex\n"));
@@ -812,13 +903,12 @@ int _tmain(int argc, TCHAR* argv[]) {
         return 1;
     }
 
-    HANDLE hThreads[2];
+    HANDLE hThreads[3];
     unsigned threadID;
 
-    hThreads[0] = (HANDLE)_beginthreadex(NULL, 0, &GeraLetrasThread, &cdata, 0, &threadID);
-    hThreads[1] = (HANDLE)_beginthreadex(NULL, 0, &GuessValidationThread, NULL, 0, &threadID);
-
-    HANDLE hPipe = CreateThread(NULL, 0, pipeCreator, &cdata, 0, NULL);
+    hThreads[0] = CreateThread(NULL, 0, GeraLetrasThread, &cdata, 0, NULL);
+    hThreads[1] = CreateThread(NULL, 0, GuessValidationThread, &cdata, 0, NULL);
+    hThreads[2] = CreateThread(NULL, 0, pipeCreator, &cdata, 0, NULL);
 
     TCHAR cmd[100];
     while (1) {
@@ -840,14 +930,22 @@ int _tmain(int argc, TCHAR* argv[]) {
     _tprintf(_T("\nOverseer shutdown initiated...\n"));
     cdata.shouldContinue = 0;
 
-    WaitForMultipleObjects(2, hThreads, TRUE, INFINITE);
+    // Send shutdown messages and close all pipes
+    WaitForSingleObject(cdata.hGameMutex, INFINITE);
+    for (int i = 0; i < cdata.sharedMem->playerCount; i++) {
+        if (cdata.sharedMem->playerList[i].hPipe != NULL) {
+            FlushFileBuffers(cdata.sharedMem->playerList[i].hPipe);
+            DisconnectNamedPipe(cdata.sharedMem->playerList[i].hPipe);
+            CloseHandle(cdata.sharedMem->playerList[i].hPipe);
+        }
+    }
+    ReleaseMutex(cdata.hGameMutex);
 
-    for (int i = 0; i < 2; i++) {
+    WaitForMultipleObjects(3, hThreads, TRUE, INFINITE);
+
+    for (int i = 0; i <3; i++) {
         CloseHandle(hThreads[i]);
     }
-
-    CloseHandle(hMutex);
-    CloseHandle(hSemaphore);
 
     UnmapViewOfFile(cdata.sharedMem);
     CloseHandle(cdata.hMapFile);
@@ -855,6 +953,7 @@ int _tmain(int argc, TCHAR* argv[]) {
     CloseHandle(cdata.hCommandMutex);
     CloseHandle(cdata.hPlayerSemaphore);
     CloseHandle(cdata.hLetterSemaphore);
-
+    CloseHandle(hMutex);
+    CloseHandle(hSemaphore);
     return 0;
 }

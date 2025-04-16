@@ -200,6 +200,7 @@ DWORD WINAPI broadcastListener(LPVOID lpParam) {
     COORD savedCursor;
 
     while (1) {
+
         if (ReceiveOverseerResponse(&msg)) {
             if (msg.msgType == MSG_BROADCAST) {
                 _tprintf(_T("\n[Broadcast] %s\n"), msg.content);
@@ -208,15 +209,19 @@ DWORD WINAPI broadcastListener(LPVOID lpParam) {
                 _tprintf(_T("\n[Server] %s\n"), msg.content);
             }
             else if (msg.msgType == MSG_KICK) {
+                system("cls");
                 _tprintf(_T("\n[Server] %s\n"), msg.content);
-                _tprintf(_T("\nPress any key to exit...\n"));
-                _getch();
-                exit(0); 
+                exit(0);
             }
         }
         else {
-            Sleep(500);
+            DWORD err = GetLastError();
+            if (err == ERROR_BROKEN_PIPE) {
+                _tprintf(_T("\nDisconnected from server.\n"));
+                exit(0);
+            }
         }
+        Sleep(100);
     }
     return 0;
 }
