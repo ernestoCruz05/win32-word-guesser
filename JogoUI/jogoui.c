@@ -287,7 +287,6 @@ int _tmain(int argc, TCHAR* argv[]) {
 
 
     while (1) {
-
         for (int i = 0; i < 3; i++) {
             SetConsoleCursorPosition(hConsole, (COORD) { 0, INPUT_START_Y + i });
             _tprintf(_T("                                                                                "));
@@ -313,6 +312,15 @@ int _tmain(int argc, TCHAR* argv[]) {
                 break;
             }
             else if (_tcscmp(input, _T(":pont")) == 0) {
+                WaitForSingleObject(cdata.hGameMutex, INFINITE);
+                BOOL isRunning = cdata.sharedMem->running;
+                ReleaseMutex(cdata.hGameMutex);
+
+                if (!isRunning) {
+                    _tprintf(_T("\n[Server] Game is not running. Wait for more players.\n"));
+                    continue;
+                }
+
                 GAME_MESSAGE msg;
                 _tcscpy_s(msg.sender, MAX_NAME_LENGTH, name);
                 msg.msgType = MSG_COMMAND;
@@ -320,6 +328,15 @@ int _tmain(int argc, TCHAR* argv[]) {
                 sendMessageOverseer(msg);
             }
             else if (_tcscmp(input, _T(":jogs")) == 0) {
+                WaitForSingleObject(cdata.hGameMutex, INFINITE);
+                BOOL isRunning = cdata.sharedMem->running;
+                ReleaseMutex(cdata.hGameMutex);
+
+                if (!isRunning) {
+                    _tprintf(_T("\n[Server] Game is not running. Wait for more players.\n"));
+                    continue;
+                }
+
                 GAME_MESSAGE msg;
                 _tcscpy_s(msg.sender, MAX_NAME_LENGTH, name);
                 msg.msgType = MSG_COMMAND;
@@ -331,6 +348,15 @@ int _tmain(int argc, TCHAR* argv[]) {
             }
         }
         else {
+            WaitForSingleObject(cdata.hGameMutex, INFINITE);
+            BOOL isRunning = cdata.sharedMem->running;
+            ReleaseMutex(cdata.hGameMutex);
+
+            if (!isRunning) {
+                _tprintf(_T("\n[Server] Game is not running. Wait for more players.\n"));
+                continue;
+            }
+
             GAME_MESSAGE guess;
             _tcscpy_s(guess.sender, MAX_NAME_LENGTH, name);
             _tcscpy_s(guess.content, 256, input);
