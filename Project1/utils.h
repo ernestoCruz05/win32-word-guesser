@@ -10,7 +10,9 @@
 #include <io.h>
 #include <fcntl.h>
 #include <process.h>
-#include <conio.h> 
+#include <conio.h>
+#include <time.h>
+
 
 
 #define MAX_WORD_LENGTH 12

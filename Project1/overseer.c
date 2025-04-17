@@ -218,6 +218,7 @@ DWORD WINAPI GeraLetrasThread(LPVOID pArguments) {
         if (cdata->shouldContinue)
         {
             Sleep(RITMO);
+            WaitForSingleObject(cdata->hGameMutex, INFINITE);
 
 
             for (int i = 0; i < MAXLETRAS; i++) {
@@ -237,8 +238,7 @@ DWORD WINAPI GeraLetrasThread(LPVOID pArguments) {
                 copyData(cdata);
             }
 
-            //printABCRDisplay();
-            //escreveABCR();
+            
             cont = 0;
             ReleaseSemaphore(cdata->hLetterSemaphore, 1, NULL);
             ReleaseMutex(cdata->hGameMutex);
@@ -358,6 +358,37 @@ int validateGuess(TCHAR* guess) {
     return 1;
 }
 
+BOOL LaunchBot(TCHAR* username, int reactionTime) {
+    TCHAR commandLine[256];
+    _stprintf_s(commandLine, 256, _T("Bot\\bot.exe %s %d"), username, reactionTime);
+
+    STARTUPINFO si = { 0 };
+    PROCESS_INFORMATION pi = { 0 };
+    si.cb = sizeof(STARTUPINFO);
+
+    if (!CreateProcess(
+        NULL,           
+        commandLine,    
+        NULL,          
+        NULL,           
+        FALSE,          
+        0,             
+        NULL,           
+        NULL,           
+        &si,            
+        &pi            
+    )) {
+        _tprintf(_T("Failed to create bot process. Error: %d\n"), GetLastError());
+        return FALSE;
+    }
+
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+    return TRUE;
+}
+
+
 DWORD WINAPI GuessValidationThread(LPVOID pArguments) {
     GameControlData* cdata = (GameControlData*)pArguments;
     while (1) {
@@ -400,6 +431,7 @@ void showGeneralHelp() {
     _tprintf(_T("kick <player> - Remove a player\n"));
     _tprintf(_T("show ? - Show display options\n"));
     _tprintf(_T("bot ? - Show bot commands\n"));
+    _tprintf(_T("rythm ? - Show rythm commands\n"));
     _tprintf(_T("exit - Quit the overseer\n"));
 }
 
@@ -416,7 +448,11 @@ void showBotHelp() {
     _tprintf(_T("bot remove <name> - Remove a bot\n"));
 }
 
-
+void showRythmHelp() {
+    _tprintf(_T("\nRythm commands:\n"));
+    _tprintf(_T("rythm up - Increase the speed (reduce interval by 1000 ms)\n"));
+    _tprintf(_T("rythm down - Decrease the speed (increase interval by 1000 ms)\n"));
+}
 
 void displaySharedMemory(GameControlData* cdata) {
     WaitForSingleObject(cdata->hGameMutex, INFINITE);
@@ -448,6 +484,8 @@ void displaySharedMemory(GameControlData* cdata) {
 
 void broadcastMaker(GameControlData* cdata, const TCHAR* messageContent)
 {
+    WaitForSingleObject(cdata->hGameMutex, INFINITE);
+
     GAME_MESSAGE broadcast;
     broadcast.msgType = MSG_BROADCAST;
     _tcscpy_s(broadcast.sender, MAX_NAME_LENGTH, _T("SERVER"));
@@ -476,10 +514,12 @@ void broadcastMaker(GameControlData* cdata, const TCHAR* messageContent)
             CloseHandle(ov.hEvent);
         }
     }
+    _tprintf(_T("\n[Broadcast] %s\n"), messageContent);
+
 }
 
 void processCommand(TCHAR* command, GameControlData* cdata) {
-    TCHAR cmd1[20], cmd2[20];
+    TCHAR cmd1[20], cmd2[20], cmd3[20];
     TCHAR param[20];
 
     if (_stscanf_s(command, _T("%19s %19s %19s"),
@@ -494,6 +534,9 @@ void processCommand(TCHAR* command, GameControlData* cdata) {
         }
         else if (_tcscmp(cmd1, _T("show")) == 0 && _tcscmp(cmd2, _T("?")) == 0) {
             showDisplayHelp();
+        } else if (_tcscmp(cmd1, _T("rythm")) == 0 && _tcscmp(cmd2, _T("?")) == 0)
+        {
+            showRythmHelp();
         }
         else if (_tcscmp(cmd1, _T("bot")) == 0 && _tcscmp(cmd2, _T("?")) == 0) {
             showBotHelp();
@@ -560,12 +603,66 @@ void processCommand(TCHAR* command, GameControlData* cdata) {
                 }
             }
             else if (_tcscmp(cmd2, _T("playerlist")) == 0) {
-                _tprintf(_T("comando playerlist"));
+                _tprintf(_T("\n=== Connected Players ===\n"));
+                int activePlayers = 0;
+
+                for (int i = 0; i < cdata->sharedMem->playerCount; i++) {
+                    if (cdata->sharedMem->playerList[i].active) {
+                        _tprintf(_T("%d. %s - %d points\n"),
+                            activePlayers + 1,
+                            cdata->sharedMem->playerList[i].name,
+                            cdata->sharedMem->playerList[i].points);
+                        activePlayers++;
+                    }
+                }
+
+                if (activePlayers == 0) {
+                    _tprintf(_T("No players currently connected.\n"));
+                }
+                else {
+                    _tprintf(_T("\nTotal connected players: %d\n"), activePlayers);
+                }
             }
         }
         else if (_tcscmp(cmd1, _T("bot")) == 0) {
             if (_tcscmp(cmd2, _T("create")) == 0) {
-                _tprintf(_T("comando bot create"));
+
+                //Esta merda nao funciona
+                TCHAR username[32] = { 0 };
+                int reactionTime = 0;
+                param[_countof(param) - 1] = '\0';
+
+               
+
+
+                if (reactionTime <= 0) {
+                    _tprintf(_T("Reaction time must be greater than 0.\n"));
+                    ReleaseMutex(hMutex);
+                    return;
+                }
+
+
+                BOOL usernameTaken = FALSE;
+                for (int i = 0; i < cdata->sharedMem->playerCount; i++) {
+                    if (_tcscmp(cdata->sharedMem->playerList[i].name, username) == 0) {
+                        usernameTaken = TRUE;
+                        break;
+                    }
+                }
+
+                if (usernameTaken) {
+                    _tprintf(_T("Username '%s' is already in use. Choose a different name.\n"), username);
+                    ReleaseMutex(hMutex);
+                    return;
+                }
+
+                if (LaunchBot(username, reactionTime)) {
+                    _tprintf(_T("Bot '%s' launched successfully with reaction time %d ms.\n"), username, reactionTime);
+                }
+                else {
+                    _tprintf(_T("Failed to launch bot '%s'.\n"), username);
+                }
+                
             }
             else if (_tcscmp(cmd2, _T("remove")) == 0) {
                 _tprintf(_T("comando bot remove"));
@@ -656,13 +753,6 @@ DWORD WINAPI clientHandler(LPVOID lpParam) {
                 return 0;
             }
 
-            if (cdata->sharedMem->playerCount > 1) {
-                WaitForSingleObject(cdata->hGameMutex, INFINITE);
-                WaitForSingleObject(cdata->hStateMutex, INFINITE);
-                cdata->shouldContinue = 1;
-                ReleaseMutex(cdata->hStateMutex);
-                ReleaseMutex(cdata->hGameMutex);
-            }
 
             int idx = cdata->sharedMem->playerCount++;
             _tcscpy_s(cdata->sharedMem->playerList[idx].name, MAX_NAME_LENGTH, msg.sender);
@@ -672,7 +762,38 @@ DWORD WINAPI clientHandler(LPVOID lpParam) {
             _stprintf_s(response.content, 256, _T("Welcome %s!"), msg.sender);
 
 
+            if (cdata->sharedMem->playerCount >= 2 && !cdata->shouldContinue) {
+                WaitForSingleObject(cdata->hStateMutex, INFINITE);
+                cdata->shouldContinue = 1;
+                cdata->sharedMem->running = 1;
+                ReleaseMutex(cdata->hStateMutex);
 
+                TCHAR startMsg[256];
+                _stprintf_s(startMsg, 256, _T("GAME STARTING: There are now %d players connected. The game is starting!"), cdata->sharedMem->playerCount);
+                broadcastMaker(cdata, startMsg);
+
+                _tprintf(_T("\n[System] Game started with %d players.\n"), cdata->sharedMem->playerCount);
+            }
+            else if (cdata->sharedMem->playerCount < 2) {
+                WaitForSingleObject(cdata->hStateMutex, INFINITE);
+                cdata->shouldContinue = 0;
+                cdata->sharedMem->running = 0;
+                ReleaseMutex(cdata->hStateMutex);
+
+                TCHAR waitMsg[256];
+                _stprintf_s(waitMsg, 256, _T("Waiting for more players. The game will start when at least 2 players are connected."));
+
+                GAME_MESSAGE waitNotice;
+                waitNotice.msgType = MSG_BROADCAST;
+                _tcscpy_s(waitNotice.sender, MAX_NAME_LENGTH, _T("SERVER"));
+                _tcscpy_s(waitNotice.content, 256, waitMsg);
+
+                DWORD bytesWritten;
+                WriteFile(hPipe, &waitNotice, sizeof(GAME_MESSAGE), &bytesWritten, NULL);
+
+                _tprintf(_T("\n[System] Player %s joined, waiting for more players (%d/2).\n"), msg.sender, cdata->sharedMem->playerCount);
+            }
+            ReleaseMutex(cdata->hGameMutex);
             break;
         }
         case MSG_COMMAND: {
@@ -722,12 +843,29 @@ DWORD WINAPI clientHandler(LPVOID lpParam) {
             break;
         }
         case MSG_DISCONNECT: {
+            int playerIndex = -1;
+
             for (int i = 0; i < cdata->sharedMem->playerCount; i++) {
                 if (_tcscmp(cdata->sharedMem->playerList[i].name, msg.sender) == 0) {
                     cdata->sharedMem->playerList[i].active = 0;
                     cdata->sharedMem->playerList[i].hPipe = NULL;
                     break;
                 }
+            }
+
+            if (cdata->sharedMem->playerCount < 2) {
+                WaitForSingleObject(cdata->hStateMutex, INFINITE);
+                cdata->shouldContinue = 0;
+                cdata->sharedMem->running = 0;
+                ReleaseMutex(cdata->hStateMutex);
+
+                if (cdata->sharedMem->playerCount > 0) {
+                    TCHAR pauseMsg[256];
+                    _stprintf_s(pauseMsg, 256, _T("GAME PAUSED: Not enough players. Waiting for more players to join."));
+                    broadcastMaker(cdata, pauseMsg);
+                }
+
+                _tprintf(_T("\n[System] Game paused due to insufficient players (%d/2).\n"), cdata->sharedMem->playerCount);
             }
 
             _tcscpy_s(response.content, 256, _T("Disconnected successfully."));
@@ -750,7 +888,7 @@ DWORD WINAPI clientHandler(LPVOID lpParam) {
                 for (int i = 0; i < cdata->sharedMem->playerCount; i++)
                 {
                     if (_tcscmp(cdata->sharedMem->playerList[i].name, msg.sender) == 0) {
-                        pointsGiven = _tcslen(msg.content) * 1.5;
+                        pointsGiven = _tcslen(msg.content);
                         cdata->sharedMem->playerList[i].points += pointsGiven;
                         break;
                     }
@@ -862,7 +1000,19 @@ int _tmain(int argc, TCHAR* argv[]) {
     _setmode(_fileno(stdout), _O_WTEXT);
     _setmode(_fileno(stderr), _O_WTEXT);
 #endif
+    HANDLE hSingleInstanceMutex = CreateMutex(NULL, TRUE, _T("Global\\OverseerSingleInstanceMutex"));
+    DWORD lastError = GetLastError();
 
+    if (hSingleInstanceMutex == NULL) {
+        _tprintf(_T("Failed to create single instance mutex. Error: %d\n"), GetLastError());
+        return 1;
+    }
+
+    if (lastError == ERROR_ALREADY_EXISTS) {
+        _tprintf(_T("Another instance of Overseer is already running.\nOnly one instance is allowed at a time.\n"));
+        CloseHandle(hSingleInstanceMutex);
+        return 1;
+    }
 
     if (!LoadOrCreateRegistrySettings()) {
         _tprintf(_T("Usando valores padrão: MAXLETRAS = %d, RITMO = %d\n"), MAXLETRAS, RITMO);
@@ -914,30 +1064,81 @@ int _tmain(int argc, TCHAR* argv[]) {
     _tprintf(_T("\nOverseer shutdown initiated...\n"));
     cdata.shouldContinue = 0;
 
-    // Send shutdown messages and close all pipes
-    WaitForSingleObject(cdata.hGameMutex, INFINITE);
-    for (int i = 0; i < cdata.sharedMem->playerCount; i++) {
-        if (cdata.sharedMem->playerList[i].hPipe != NULL) {
-            FlushFileBuffers(cdata.sharedMem->playerList[i].hPipe);
-            DisconnectNamedPipe(cdata.sharedMem->playerList[i].hPipe);
-            CloseHandle(cdata.sharedMem->playerList[i].hPipe);
-        }
-    }
-    ReleaseMutex(cdata.hGameMutex);
+    TCHAR shutdownMsg[256];
+    _stprintf_s(shutdownMsg, 256, _T("SERVER SHUTDOWN: The game server is shutting down."));
+    broadcastMaker(&cdata, shutdownMsg);
 
-    WaitForMultipleObjects(3, hThreads, TRUE, INFINITE);
+    Sleep(1000);
+
+    if (cdata.hGameMutex != NULL) {
+        WaitForSingleObject(cdata.hGameMutex, INFINITE);
+
+        for (int i = 0; i < cdata.sharedMem->playerCount; i++) {
+            if (cdata.sharedMem->playerList[i].active && cdata.sharedMem->playerList[i].hPipe != NULL) {
+                GAME_MESSAGE kickMsg;
+                kickMsg.msgType = MSG_KICK;
+                _tcscpy_s(kickMsg.sender, MAX_NAME_LENGTH, _T("SERVER"));
+                _tcscpy_s(kickMsg.content, 256, _T("Server is shutting down. Connection will be closed."));
+
+                DWORD bytesWritten;
+                WriteFile(cdata.sharedMem->playerList[i].hPipe, &kickMsg, sizeof(GAME_MESSAGE), &bytesWritten, NULL);
+
+                Sleep(200);
+
+                FlushFileBuffers(cdata.sharedMem->playerList[i].hPipe);
+                DisconnectNamedPipe(cdata.sharedMem->playerList[i].hPipe);
+                CloseHandle(cdata.sharedMem->playerList[i].hPipe);
+                cdata.sharedMem->playerList[i].hPipe = NULL;
+            }
+        }
+
+        ReleaseMutex(cdata.hGameMutex);
+    }
+
+    DWORD waitResult = WaitForMultipleObjects(3, hThreads, TRUE, 5000);
+    if (waitResult == WAIT_TIMEOUT) {
+        _tprintf(_T("Threads did not gracefully end.\n"));
+    }
 
     for (int i = 0; i < 3; i++) {
-        CloseHandle(hThreads[i]);
+        if (hThreads[i] != NULL) {
+            CloseHandle(hThreads[i]);
+        }
     }
 
-    UnmapViewOfFile(cdata.sharedMem);
-    CloseHandle(cdata.hMapFile);
-    CloseHandle(cdata.hGameMutex);
-    CloseHandle(cdata.hCommandMutex);
-    CloseHandle(cdata.hPlayerSemaphore);
-    CloseHandle(cdata.hLetterSemaphore);
-    CloseHandle(hMutex);
-    CloseHandle(hSemaphore);
+    if (cdata.sharedMem != NULL) {
+        UnmapViewOfFile(cdata.sharedMem);
+    }
+
+    if (cdata.hMapFile != NULL) {
+        CloseHandle(cdata.hMapFile);
+    }
+
+    if (cdata.hGameMutex != NULL) {
+        CloseHandle(cdata.hGameMutex);
+    }
+
+    if (cdata.hCommandMutex != NULL) {
+        CloseHandle(cdata.hCommandMutex);
+    }
+
+    if (cdata.hPlayerSemaphore != NULL) {
+        CloseHandle(cdata.hPlayerSemaphore);
+    }
+
+    if (cdata.hLetterSemaphore != NULL) {
+        CloseHandle(cdata.hLetterSemaphore);
+    }
+
+    if (hMutex != NULL) {
+        CloseHandle(hMutex);
+    }
+
+    if (hSemaphore != NULL) {
+        CloseHandle(hSemaphore);
+    }
+    CloseHandle(hSingleInstanceMutex);
+
+    _tprintf(_T("Overseer shutdown complete.\n"));
     return 0;
 }
