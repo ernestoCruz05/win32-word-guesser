@@ -358,36 +358,6 @@ int validateGuess(TCHAR* guess) {
     return 1;
 }
 
-BOOL LaunchBot(TCHAR* username, int reactionTime) {
-    TCHAR commandLine[256];
-    _stprintf_s(commandLine, 256, _T("Bot\\bot.exe %s %d"), username, reactionTime);
-
-    STARTUPINFO si = { 0 };
-    PROCESS_INFORMATION pi = { 0 };
-    si.cb = sizeof(STARTUPINFO);
-
-    if (!CreateProcess(
-        NULL,           
-        commandLine,    
-        NULL,          
-        NULL,           
-        FALSE,          
-        0,             
-        NULL,           
-        NULL,           
-        &si,            
-        &pi            
-    )) {
-        _tprintf(_T("Failed to create bot process. Error: %d\n"), GetLastError());
-        return FALSE;
-    }
-
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-
-    return TRUE;
-}
-
 
 DWORD WINAPI GuessValidationThread(LPVOID pArguments) {
     GameControlData* cdata = (GameControlData*)pArguments;
@@ -518,6 +488,39 @@ void broadcastMaker(GameControlData* cdata, const TCHAR* messageContent)
 
 }
 
+BOOL LaunchBot(TCHAR* username, int reactionTime, GameControlData* cdata) {
+    TCHAR commandLine[256];
+    _stprintf_s(commandLine, 256, _T("bot.exe %s %d"), username, reactionTime);
+
+    STARTUPINFO si = { 0 };
+    PROCESS_INFORMATION pi = { 0 };
+    si.cb = sizeof(STARTUPINFO);
+
+    BOOL success = CreateProcess(
+        _T("C:\\Users\\fakyc\\source\\repos\\TrabalhoPratico_SistemasOperativos2\\x64\\Debug\\Bot.exe"),
+        commandLine,
+        NULL,
+        NULL,
+        FALSE,
+        CREATE_NEW_CONSOLE,
+        NULL,
+        _T("C:\\Users\\fakyc\\source\\repos\\TrabalhoPratico_SistemasOperativos2\\x64\\Debug"),
+        &si, &pi
+    );
+
+    if (!success) {
+        _tprintf(_T("Failed to create bot process. Error: %d\n"), GetLastError());
+        return;
+    }
+
+
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+    return TRUE;
+}
+
+
 void processCommand(TCHAR* command, GameControlData* cdata) {
     TCHAR cmd1[20], cmd2[20], cmd3[20];
     TCHAR param[20];
@@ -627,16 +630,19 @@ void processCommand(TCHAR* command, GameControlData* cdata) {
         else if (_tcscmp(cmd1, _T("bot")) == 0) {
             if (_tcscmp(cmd2, _T("create")) == 0) {
 
-                //Esta merda nao funciona
                 TCHAR username[32] = { 0 };
                 int reactionTime = 0;
                 param[_countof(param) - 1] = '\0';
 
                
+                if (_stscanf_s(command, _T("%*s %*s %31s %d"), username, (unsigned)_countof(username), &reactionTime) != 2) {
+                    _tprintf(_T("Invalid parameters. Usage: bot create <username> <reaction_time_ms>.\n"));
+                    ReleaseMutex(hMutex);
+                    return;
+                }
 
-
-                if (reactionTime <= 0) {
-                    _tprintf(_T("Reaction time must be greater than 0.\n"));
+                if (reactionTime < 5000) {
+                    _tprintf(_T("Reaction time must be greater or equal than 5000.\n"));
                     ReleaseMutex(hMutex);
                     return;
                 }
@@ -656,8 +662,9 @@ void processCommand(TCHAR* command, GameControlData* cdata) {
                     return;
                 }
 
-                if (LaunchBot(username, reactionTime)) {
+                if (LaunchBot(username, reactionTime, cdata)) {
                     _tprintf(_T("Bot '%s' launched successfully with reaction time %d ms.\n"), username, reactionTime);
+
                 }
                 else {
                     _tprintf(_T("Failed to launch bot '%s'.\n"), username);
@@ -665,7 +672,57 @@ void processCommand(TCHAR* command, GameControlData* cdata) {
                 
             }
             else if (_tcscmp(cmd2, _T("remove")) == 0) {
-                _tprintf(_T("comando bot remove"));
+                if (_tcslen(param) == 0) {
+                    _tprintf(_T("Usage: bot remove <name>\n"));
+                    ReleaseMutex(hMutex);
+                    return;
+                }
+                BOOL found = FALSE;
+                for (int i = 0; i < cdata->sharedMem->playerCount; i++) {
+                    if (cdata->sharedMem->playerList[i].active &&
+                        _tcscmp(cdata->sharedMem->playerList[i].name, param) == 0) {
+
+                        _tprintf(_T("Removing bot: %s\n"), param);
+
+                        if (cdata->sharedMem->playerList[i].hPipe != NULL) {
+                            GAME_MESSAGE kickMsg;
+                            kickMsg.msgType = MSG_KICK;
+                            _tcscpy_s(kickMsg.sender, MAX_NAME_LENGTH, _T("SERVER"));
+                            _tcscpy_s(kickMsg.content, 256, _T("You have been removed by the overseer."));
+
+                            DWORD written;
+                            WriteFile(cdata->sharedMem->playerList[i].hPipe, &kickMsg, sizeof(GAME_MESSAGE), &written, NULL);
+                            FlushFileBuffers(cdata->sharedMem->playerList[i].hPipe);
+
+                            Sleep(200);
+
+                            CloseHandle(cdata->sharedMem->playerList[i].hPipe);
+                            cdata->sharedMem->playerList[i].hPipe = NULL;
+
+                        }
+
+                        int last = cdata->sharedMem->playerCount - 1;
+                        if (i != last) {
+                            cdata->sharedMem->playerList[i] = cdata->sharedMem->playerList[last];
+                        }
+
+                        memset(&cdata->sharedMem->playerList[last], 0, sizeof(PLAYER));
+                        cdata->sharedMem->playerCount--;
+
+                        _tprintf(_T("Bot '%s' removed successfully.\n"), param);
+
+                        TCHAR msg[256];
+                        _stprintf_s(msg, 256, _T("Bot %s has been removed from the game."), param);
+                        broadcastMaker(cdata, msg);
+
+                        found = TRUE;
+                        break;
+                    }
+                }
+
+                if (!found) {
+                    _tprintf(_T("No bot or player named '%s' was found.\n"), param);
+                }
             }
         }
         else if (_tcscmp(cmd1, _T("rythm")) == 0)
@@ -760,7 +817,9 @@ DWORD WINAPI clientHandler(LPVOID lpParam) {
             cdata->sharedMem->playerList[idx].active = 1;
             cdata->sharedMem->playerList[idx].hPipe = hPipe;
             _stprintf_s(response.content, 256, _T("Welcome %s!"), msg.sender);
-
+            TCHAR braod[256];
+            _stprintf_s(braod, 256, _T("User %s connected to the game!"), msg.sender);
+            broadcastMaker(cdata, braod);
 
             if (cdata->sharedMem->playerCount >= 2 && !cdata->shouldContinue) {
                 WaitForSingleObject(cdata->hStateMutex, INFINITE);
@@ -972,6 +1031,8 @@ DWORD WINAPI pipeCreator(LPVOID pArguments) {
             NULL
         );
 
+
+
         if (hPipe == INVALID_HANDLE_VALUE) {
             _tprintf(_T("Error creating named pipe: %d\n"), GetLastError());
             continue;
@@ -979,6 +1040,7 @@ DWORD WINAPI pipeCreator(LPVOID pArguments) {
 
         BOOL connected = ConnectNamedPipe(hPipe, NULL) || GetLastError() == ERROR_PIPE_CONNECTED;
         if (connected) {
+            _tprintf(_T("[Overseer] Pipe connected successfully.\n"));
             PipeClientContext* ctx = (PipeClientContext*)malloc(sizeof(PipeClientContext));
             ctx->pipe = hPipe;
             ctx->cdata = cdata;

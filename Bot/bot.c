@@ -2,18 +2,6 @@
 int botRunning = 1;
 HANDLE hPipe = INVALID_HANDLE_VALUE;
 
-
-
-BOOL SendMessageToOverseer(GAME_MESSAGE msg) {
-    if (hPipe == INVALID_HANDLE_VALUE) {
-        _tprintf(_T("Pipe is invalid.\n"));
-        return FALSE;
-    }
-
-    DWORD bytesWritten;
-    return WriteFile(hPipe, &msg, sizeof(GAME_MESSAGE), &bytesWritten, NULL);
-}
-
 BOOL ReceiveOverseerResponse(GAME_MESSAGE* response) {
     if (hPipe == INVALID_HANDLE_VALUE) return FALSE;
 
@@ -35,7 +23,18 @@ BOOL ReceiveOverseerResponse(GAME_MESSAGE* response) {
     return (bytesRead > 0);
 }
 
-BOOL ConnectToGame(TCHAR* username) {
+BOOL SendMessageToOverseer(GAME_MESSAGE msg) {
+    if (hPipe == INVALID_HANDLE_VALUE) {
+        _tprintf(_T("Pipe is invalid.\n"));
+        return FALSE;
+    }
+
+    DWORD bytesWritten;
+    return WriteFile(hPipe, &msg, sizeof(GAME_MESSAGE), &bytesWritten, NULL);
+}
+
+BOOL ConnectToGame(TCHAR* name)
+{
     WaitNamedPipe(PIPE_NAME, NMPWAIT_WAIT_FOREVER);
 
     hPipe = CreateFile(
@@ -48,30 +47,34 @@ BOOL ConnectToGame(TCHAR* username) {
         NULL
     );
 
-    if (hPipe == INVALID_HANDLE_VALUE) {
-        _tprintf(_T("Failed to connect to the overseer.\n"));
-        return FALSE;
-    }
+    int i = 0;
+    
+        DWORD mode = PIPE_READMODE_MESSAGE | PIPE_NOWAIT;
+        SetNamedPipeHandleState(hPipe, &mode, NULL, NULL);
 
-    DWORD mode = PIPE_READMODE_MESSAGE | PIPE_NOWAIT;
-    SetNamedPipeHandleState(hPipe, &mode, NULL, NULL);
+        GAME_MESSAGE gX;
+        _tcscpy_s(gX.sender, 256, name);
+        gX.msgType = MSG_REGISTER;
+        _tcscpy_s(gX.content, 256, _T(""));
 
-    GAME_MESSAGE msg;
-    _tcscpy_s(msg.sender, MAX_NAME_LENGTH, username);
-    msg.msgType = MSG_REGISTER;
-    _tcscpy_s(msg.content, 256, _T(""));
-
-    DWORD bytesWritten;
-    if (!WriteFile(hPipe, &msg, sizeof(GAME_MESSAGE), &bytesWritten, NULL)) {
-        _tprintf(_T("Failed to register bot.\n"));
-        CloseHandle(hPipe);
-        return FALSE;
-    }
-
-    GAME_MESSAGE response;
-    if (ReceiveOverseerResponse(&response)) {
-        _tprintf(_T("%s\n"), response.content);
-        return TRUE;
+        DWORD bytesW;
+        if (!WriteFile(hPipe, &gX, sizeof(GAME_MESSAGE), &bytesW, NULL)) {
+            _tprintf(_T("Registration failed\n"));
+            CloseHandle(hPipe);
+            return FALSE;
+        }
+        while (i < 5)
+        {
+        GAME_MESSAGE response;
+        if (ReceiveOverseerResponse(&response)) {
+            _tprintf(_T("%s\n"), response.content);
+            return TRUE;
+        } else
+        {
+			_tprintf(_T("Failed to receive response from overseer.\n"));
+			Sleep(1000);
+			i++;
+        }
     }
 
     return FALSE;
@@ -83,7 +86,7 @@ DWORD WINAPI ListenToOverseer(LPVOID lpParam) {
         if (ReceiveOverseerResponse(&msg)) {
             if (msg.msgType == MSG_KICK) {
                 _tprintf(_T("[Overseer] %s\n"), msg.content);
-                botRunning = 0; // Encerrar o bot
+                botRunning = 0;
             }
             else if (msg.msgType == MSG_BROADCAST) {
                 _tprintf(_T("[Broadcast] %s\n"), msg.content);
@@ -95,7 +98,6 @@ DWORD WINAPI ListenToOverseer(LPVOID lpParam) {
 }
 
 int _tmain(int argc, TCHAR* argv[]) {
-
 
 
     TCHAR username[MAX_NAME_LENGTH];
@@ -137,9 +139,19 @@ int _tmain(int argc, TCHAR* argv[]) {
         _tcscpy_s(guess.sender, MAX_NAME_LENGTH, username);
         _tcscpy_s(guess.content, 256, chosenWord);
         guess.msgType = MSG_GUESS;
-
+        
         if (SendMessageToOverseer(guess)) {
-            _tprintf(_T("[Bot '%s'] Attempted word: %s\n"), username, chosenWord);
+            system("cls");
+            _tprintf(_T("Bot dictionary:\n"));
+            for (int i = 0 ; i < 10 ; i++)
+            {
+				_tprintf(_T("%s |"), botDictionary[i]);
+                if (i == 4)
+                {
+					_tprintf(_T("\n"));
+                }
+            }
+            _tprintf(_T("\n[Bot '%s'] Attempted word: %s\n"), username, chosenWord);
         }
         else {
             _tprintf(_T("[Bot '%s'] Failed to send word: %s\n"), username, chosenWord);
@@ -152,6 +164,6 @@ int _tmain(int argc, TCHAR* argv[]) {
     WaitForSingleObject(hListenerThread, INFINITE);
     CloseHandle(hListenerThread);
     CloseHandle(hPipe);
-
+    Sleep(5000);
     return 0;
 }
