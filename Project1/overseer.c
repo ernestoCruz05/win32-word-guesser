@@ -16,23 +16,18 @@ int bufferEnd = 0;
 
 int broadFlag = 0;
 
-TCHAR dictionary[51][10] = {
-    _T("casa"), _T("pato"), _T("mesa"), _T("fogo"), _T("nuvem"),
-    _T("vento"), _T("pedra"), _T("chao"), _T("livro"), _T("porta"),
-    _T("faca"), _T("rio"), _T("chave"), _T("leite"), _T("canto"),
-    _T("velha"), _T("tres"), _T("verde"), _T("folha"), _T("lápis"),
-    _T("papel"), _T("areia"), _T("brisa"), _T("barco"), _T("dente"),
-    _T("campo"), _T("luz"), _T("corpo"), _T("ninho"), _T("tempo"),
-    _T("peixe"), _T("pomba"), _T("manga"), _T("vento"), _T("cobra"),
-    _T("poder"), _T("sabor"), _T("gosto"), _T("troca"), _T("morte"),
-    _T("ferro"), _T("marca"), _T("grito"), _T("falta"), _T("prato"),
-    _T("cinto"), _T("sorte"), _T("tigre"), _T("vazio"), _T("magia"),
-    _T("hhp")
-};
+TCHAR dictionary[1236][MAX_WORD_LENGTH];
 PLAYER playerList[10];
 int playerCount = 0;
 
-
+/**
+ * LoadOrCreateRegistrySettings - Acho que mais obvio o nome não pode ser, vai tentar ir buscar a info do RITMO e MAXLETRAS a registry, se não existir cria esse par-valor
+ *
+ * 
+ * 
+ * @return  True - Correu tudo bem, o par chave-valor foi criado ou lido com sucesso
+ *          False - GG, algo correu mal, vai usar os valores definidos como RITMO e MAXLETRAS
+ */
 BOOL LoadOrCreateRegistrySettings() {
     HKEY hKey;
     DWORD disp;
@@ -82,6 +77,14 @@ BOOL LoadOrCreateRegistrySettings() {
     return TRUE;
 }
 
+/** initResources - Inicializa os recursos principais, como a shared memory e cenas da sincronização
+ * 
+ * @param cdata - Genuinamente queria encontrar uma maneira mais facil de chamar este parametro, talvez
+ *                definir cdata como global, mas acho q isso dava merda, por isso gramamos com passar *cdata
+ *                constantemente
+ * @return True - Está tudo fixe, se não, o programa fecha logo
+ *         False - Alguma cena pifou, nao percebo como, mas de qualquer maneira, o programa fecha
+ */
 BOOL initResources(GameControlData* cdata)
 {
     cdata->hMapFile = CreateFileMapping(
@@ -139,6 +142,8 @@ BOOL initResources(GameControlData* cdata)
     );
     cdata->hStateMutex = CreateMutex(NULL, FALSE, STATE_MUTEX_NAME);
 
+    cdata->hStartEvent = CreateEvent(NULL, TRUE, FALSE, NULL); 
+
     WaitForSingleObject(cdata->hGameMutex, INFINITE);
     memset(cdata->sharedMem->letters, '_', MAXLETRAS);
     memset(cdata->sharedMem->displayedLetters, '_', MAXLETRAS);
@@ -149,14 +154,55 @@ BOOL initResources(GameControlData* cdata)
     _tcscpy_s(cdata->sharedMem->currentLeader, MAX_NAME_LENGTH, _T(""));
     ReleaseMutex(cdata->hGameMutex);
 
-    cdata->shouldContinue = 1;
+    cdata->shouldContinue = 0;
 
     return TRUE;
 }
 
+/** LoadDictionaryFromFile - Nomes mais explicativos não existem, so carrega o dicionario do ficheiro.txt,
+ *                           nem precisava de passar o nome do ficheiro porque é sempre o mesmo, mas eu até
+ *                           curto de escrever argumentos em funções. Provavelmente quando formos testar na
+ *                           defesa vai dar merda porque o caminho do ficheiro é diferente, mas isso é um problema
+ *                           para outro dia.
+ * 
+ * @param filePath         - Caminho do dicionário
+ * @param dictionary       - Array onde o dicionário vai ser guardado, porque é q simplesmente não usei uma variavel global? Eu usei e como sou porreiro vou deixar assim na mesma
+ *                           , pode ser preciso aceder ao dicionario noutra função ou num futuro distante
+ * @param wordCount        - Ponteiro para o número de palavras lidas, porque é que não usei uma variavel global? Porque sou porreiro e gosto de passar argumentos
+ * @return 
+ */
+BOOL LoadDictionaryFromFile(const TCHAR* filePath, TCHAR dictionary[][MAX_WORD_LENGTH], int* wordCount) {
+    FILE* file;
+    _tfopen_s(&file, filePath, _T("r"));
+    if (file == NULL) {
+        _tprintf(_T("Failed to open dictionary file: %s\n"), filePath);
+        return FALSE;
+    }
+
+    int count = 0;
+    while (_fgetts(dictionary[count], MAX_WORD_LENGTH, file) != NULL) {
+        size_t len = _tcslen(dictionary[count]);
+        if (len > 0 && dictionary[count][len - 1] == '\n') {
+            dictionary[count][len - 1] = '\0';
+        }
+        count++;
+
+        if (count >= 1236) {
+            break;
+        }
+    }
+
+    *wordCount = count;
+    fclose(file);
+
+    _tprintf(_T("Dictionary loaded successfully with %d words.\n"), count);
+    return TRUE;
+}
 
 
-
+/** printABCR - Imprime o array abcR, ja fizemos isto a tanto tempo que ja nao me lembro
+ *                da diferença entre isto e o abcRDisplay.
+ */
 void printABCR() {
     _tprintf(_T("\n\nabcR (Oldest comes first): "));
     for (int i = 0; i < MAXLETRAS; i++) {
@@ -164,6 +210,10 @@ void printABCR() {
     }
     _tprintf(_T("\n"));
 }
+
+/** printABCRDisplay - Nem te vais acreditar no que esta função faz...
+ *                
+ */
 
 void printABCRDisplay() {
     _tprintf(_T("\n\nabcRDisplay (What players see): "));
@@ -173,7 +223,12 @@ void printABCRDisplay() {
     _tprintf(_T("\n"));
 }
 
+/** createLetter - Escolhe uma letra aleatoria e coloca-a na posição indicada
+ * 
+ * @param pos - Nunca vais adivinhar, é a posição onde a letra vai ser colocada
+ */
 void createLetter(int pos) {
+    _tprintf(_T("[DEBUG] createLetter called for pos %d\n"), pos);
     int r = rand() % 26;
     abcR[pos] = abc[r];
 
@@ -187,6 +242,9 @@ void createLetter(int pos) {
     }
 }
 
+/** removeOldest - Remove a letra mais antiga do array abcR, ou seja, a letra mais a esquerda
+ * 
+ */
 void removeOldest() {
     int posRemoved = abcRInfo[0][1];
 
@@ -203,6 +261,11 @@ void removeOldest() {
     abcRDisplay[posRemoved] = '_';
 }
 
+/** copyData - Copia os dados do abcR, abcRDisplay e abcRInfo para a shared memory
+ *             , nunca tive tão feliz com uma função, poupou tanto trabalho
+ *             
+ * @param cdata - Estou farto de ver cdata a frente, mas é o que temos
+ */
 void copyData(GameControlData* cdata)
 {
     memcpy(cdata->sharedMem->displayedLetters, abcRDisplay, sizeof(abcRDisplay));
@@ -210,12 +273,53 @@ void copyData(GameControlData* cdata)
     memcpy(cdata->sharedMem->letterInfo, abcRInfo, sizeof(abcRInfo));
 }
 
+/** toggleGame - Função schizo que crier enquanto tentatava perceber o erro do broadcast, basicamente so
+ *               ve se tem jogadores sufecientes para começar o jogo ou não, se sim, começa o jogo
+ * 
+ * @param cdata - EU ESTOU TÂO FARTO DE TI
+ * @return GAME_STATE_NO_CHANGE - Não houve mudança nenhuma (ou seja, se estava ativo, continua ativo, se estava inativo, continua inativo)
+ *         GAME_STATE_STARTED - O jogo começou, ou seja, tem 2 jogadores
+ *         GAME_STATE_PAUSED - O jogo parou, ou seja, tem menos de 2 jogadores
+ */
+int toggleGame(GameControlData* cdata) {
+    int result = GAME_STATE_NO_CHANGE;
+
+    WaitForSingleObject(cdata->hStateMutex, INFINITE);
+
+    if (cdata->sharedMem->playerCount >= 2 && !cdata->shouldContinue) {
+        cdata->shouldContinue = 1;
+        SetEvent(cdata->hStartEvent);
+        cdata->sharedMem->running = 1;
+        result = GAME_STATE_STARTED;
+    }
+    else if (cdata->sharedMem->playerCount < 2 && cdata->shouldContinue) {
+        cdata->shouldContinue = 0;
+        ResetEvent(cdata->hStartEvent);
+        cdata->sharedMem->running = 0;
+        result = GAME_STATE_PAUSED;
+    }
+
+    ReleaseMutex(cdata->hStateMutex);
+    return result;
+}
+
+
+/** GeraLetrasThread - Quem ler o nome vai achar que é uma thread que gera letras, quer ler o codigo vê que é isso que ela faz
+ * 
+ * @param pArguments - Ponteiro para os argumentos passados para a thread, neste caso é o cdata, mais uma vez
+ * @return Por agora as threads não acabam gracefully, mas se calhar um dia conseguimos implementar isso, aposto que é so trocar o while
+ */
 DWORD WINAPI GeraLetrasThread(LPVOID pArguments) {
+    _tprintf(_T("[GeraLetrasThread] Started\n"));
     GameControlData* cdata = (GameControlData*)pArguments;
     int cont = 0;
-
+    int a = 1;
     while (1) {
-        if (cdata->shouldContinue)
+
+        WaitForSingleObject(cdata->hStartEvent, INFINITE);
+
+
+        if (a)
         {
             Sleep(RITMO);
             WaitForSingleObject(cdata->hGameMutex, INFINITE);
@@ -238,7 +342,7 @@ DWORD WINAPI GeraLetrasThread(LPVOID pArguments) {
                 copyData(cdata);
             }
 
-            
+
             cont = 0;
             ReleaseSemaphore(cdata->hLetterSemaphore, 1, NULL);
             ReleaseMutex(cdata->hGameMutex);
@@ -253,6 +357,11 @@ DWORD WINAPI GeraLetrasThread(LPVOID pArguments) {
 
 }
 
+/** countLetters - Conta as letras que existem no array abcR, e imprime quantas existem
+ * 
+ * @param arr   -  Isto é sempre o abcR, porque é que temos isto sequer? Porgue gostas de complicar a vida
+ * @param count -  Array onde vai guardar o número de letras, ou seja, o número de vezes que cada letra aparece
+ */
 void countLetters(char* arr, int* count) {
     for (int i = 0; i < 26; i++) {
         count[i] = 0;
@@ -272,6 +381,13 @@ void countLetters(char* arr, int* count) {
     _tprintf(_T("\n"));
 }
 
+/** validateGuess - Valida a palavra dada pelo jogador, ou seja, verifica se a palavra existe no dicionário e se as letras estão disponíveis
+ *                  , também substitui as letras que foram adivinhadas no abcRDisplay
+ *
+ * @param guess - Palavra a validar
+ * @return 1 - Palavra válida
+ *         0 - Palavra inválida
+ */
 int validateGuess(TCHAR* guess) {
     int needed[26] = { 0 };
     int have[26] = { 0 };
@@ -312,7 +428,7 @@ int validateGuess(TCHAR* guess) {
         }
     }
 
-    for (int i = 0; i < 51; i++) {
+    for (int i = 0; i < 1236; i++) {
         if (_tcscmp(guess, dictionary[i]) == 0) {
             found = 1;
             break;
@@ -358,7 +474,11 @@ int validateGuess(TCHAR* guess) {
     return 1;
 }
 
-
+/** GuessValidationThread - Thread que valida as palavras dadas pelos jogadores, ou seja, verifica se a palavra existe no dicionário e se as letras estão disponíveis
+ *
+ * @param pArguments - Ponteiro para os argumentos passados para a thread, neste caso é o cdata, mais uma vez
+ * @return Por agora as threads não acabam gracefully, mas se calhar um dia conseguimos implementar isso, aposto que é so trocar o while
+ */
 DWORD WINAPI GuessValidationThread(LPVOID pArguments) {
     GameControlData* cdata = (GameControlData*)pArguments;
     while (1) {
@@ -384,17 +504,7 @@ DWORD WINAPI GuessValidationThread(LPVOID pArguments) {
     return 0;
 }
 
-void addWordToBuffer(TCHAR* word) {
-    WaitForSingleObject(hMutex, INFINITE);
-
-    _tcscpy_s(wordBuffer[bufferEnd], MAX_WORD_LENGTH, word);
-    bufferEnd = (bufferEnd + 1) % BUFFER_SIZE;
-
-    ReleaseMutex(hMutex);
-
-    ReleaseSemaphore(hSemaphore, 1, NULL);
-}
-
+// Não vou estar a documentar estas aqui.
 void showGeneralHelp() {
     _tprintf(_T("\nAvailable commands:\n"));
     _tprintf(_T("? - Show this help\n"));
@@ -424,6 +534,10 @@ void showRythmHelp() {
     _tprintf(_T("rythm down - Decrease the speed (increase interval by 1000 ms)\n"));
 }
 
+/** displaySharedMemory - Imprime o conteudo da shared memory, ou seja, as letras e o estado do jogo
+ * 
+ * @param cdata - EU ODEIO-TE TANTO CDATA
+ */
 void displaySharedMemory(GameControlData* cdata) {
     WaitForSingleObject(cdata->hGameMutex, INFINITE);
 
@@ -452,6 +566,12 @@ void displaySharedMemory(GameControlData* cdata) {
     ReleaseMutex(cdata->hGameMutex);
 }
 
+/** broadcastMaker - Nunca tive tanta raiva de uma função, basicamente faz broadcast a todos os jogadores, quando lhe apetece
+ *                   pelo que me apercebi.
+ * 
+ * @param cdata - ...
+ * @param messageContent - A frase que é para dar broadcast
+ */
 void broadcastMaker(GameControlData* cdata, const TCHAR* messageContent)
 {
     WaitForSingleObject(cdata->hGameMutex, INFINITE);
@@ -488,6 +608,15 @@ void broadcastMaker(GameControlData* cdata, const TCHAR* messageContent)
 
 }
 
+/** LaunchBot - Lança o bot, ou seja, cria um processo novo com o bot.exe e passa-lhe os argumentos, porque é que é a unica função
+ *              que começa por uma letra maiuscula? 
+ * 
+ * @param username - Nome do bot, ou seja, o nome que vai aparecer no jogo
+ * @param reactionTime - Tempo de reação do bot, ou seja, o tempo que o bot vai esperar para adivinhar a palavra
+ * @param cdata - uh...
+ * @return True - O bot foi criado com sucesso
+ *         False - O bot não foi criado com sucesso
+ */
 BOOL LaunchBot(TCHAR* username, int reactionTime, GameControlData* cdata) {
     TCHAR commandLine[256];
     _stprintf_s(commandLine, 256, _T("bot.exe %s %d"), username, reactionTime);
@@ -520,7 +649,11 @@ BOOL LaunchBot(TCHAR* username, int reactionTime, GameControlData* cdata) {
     return TRUE;
 }
 
-
+/** processCommand - Processa os comandos dados pelo administrador
+ *
+ * @param command - Comando dado pelo administrador
+ * @param cdata - ... uhhh
+ */
 void processCommand(TCHAR* command, GameControlData* cdata) {
     TCHAR cmd1[20], cmd2[20], cmd3[20];
     TCHAR param[20];
@@ -537,7 +670,8 @@ void processCommand(TCHAR* command, GameControlData* cdata) {
         }
         else if (_tcscmp(cmd1, _T("show")) == 0 && _tcscmp(cmd2, _T("?")) == 0) {
             showDisplayHelp();
-        } else if (_tcscmp(cmd1, _T("rythm")) == 0 && _tcscmp(cmd2, _T("?")) == 0)
+        }
+        else if (_tcscmp(cmd1, _T("rythm")) == 0 && _tcscmp(cmd2, _T("?")) == 0)
         {
             showRythmHelp();
         }
@@ -634,7 +768,7 @@ void processCommand(TCHAR* command, GameControlData* cdata) {
                 int reactionTime = 0;
                 param[_countof(param) - 1] = '\0';
 
-               
+
                 if (_stscanf_s(command, _T("%*s %*s %31s %d"), username, (unsigned)_countof(username), &reactionTime) != 2) {
                     _tprintf(_T("Invalid parameters. Usage: bot create <username> <reaction_time_ms>.\n"));
                     ReleaseMutex(hMutex);
@@ -669,7 +803,7 @@ void processCommand(TCHAR* command, GameControlData* cdata) {
                 else {
                     _tprintf(_T("Failed to launch bot '%s'.\n"), username);
                 }
-                
+
             }
             else if (_tcscmp(cmd2, _T("remove")) == 0) {
                 if (_tcslen(param) == 0) {
@@ -766,7 +900,11 @@ void processCommand(TCHAR* command, GameControlData* cdata) {
         ReleaseMutex(hMutex);
     }
 }
-
+/** clientHandler - Função que lida com os clientes, ou seja, recebe mensagens dos clientes e processa-as
+ *
+ * @param lpParam - Ponteiro para os argumentos passados para a thread, neste caso é o cdata, mais uma vez
+ * @return 0 - Supostamente da return 0 quando acaba, mas a este andar isto nunca na vida acontece
+ */
 DWORD WINAPI clientHandler(LPVOID lpParam) {
     PipeClientContext* ctx = (PipeClientContext*)lpParam;
     HANDLE hPipe = ctx->pipe;
@@ -821,37 +959,18 @@ DWORD WINAPI clientHandler(LPVOID lpParam) {
             _stprintf_s(braod, 256, _T("User %s connected to the game!"), msg.sender);
             broadcastMaker(cdata, braod);
 
-            if (cdata->sharedMem->playerCount >= 2 && !cdata->shouldContinue) {
-                WaitForSingleObject(cdata->hStateMutex, INFINITE);
-                cdata->shouldContinue = 1;
-                cdata->sharedMem->running = 1;
-                ReleaseMutex(cdata->hStateMutex);
-
-                TCHAR startMsg[256];
-                _stprintf_s(startMsg, 256, _T("GAME STARTING: There are now %d players connected. The game is starting!"), cdata->sharedMem->playerCount);
-                broadcastMaker(cdata, startMsg);
-
-                _tprintf(_T("\n[System] Game started with %d players.\n"), cdata->sharedMem->playerCount);
+            int change = toggleGame(cdata);
+            if (change == GAME_STATE_STARTED) {
+                // Por muito que eu gostasse de perceber oq está a causar o pipe do primeiro jogador crashar
+                // ate que o segundo jogador dé input a alguma coisa, eu genuinamente não consigo ver, os mutexes
+                // estão todos bem, nada está a ser acedido onde não devia, os pipes deviam estar limpos sem problemas
+                // mas mesmo assim eu esta merda de broadcast não funciona e eu estou farto de tentar arranjar isto, vai assim.
+               // broadcastMaker(cdata, _T("GAME STARTED: Enough players are connected!"));
             }
-            else if (cdata->sharedMem->playerCount < 2) {
-                WaitForSingleObject(cdata->hStateMutex, INFINITE);
-                cdata->shouldContinue = 0;
-                cdata->sharedMem->running = 0;
-                ReleaseMutex(cdata->hStateMutex);
-
-                TCHAR waitMsg[256];
-                _stprintf_s(waitMsg, 256, _T("Waiting for more players. The game will start when at least 2 players are connected."));
-
-                GAME_MESSAGE waitNotice;
-                waitNotice.msgType = MSG_BROADCAST;
-                _tcscpy_s(waitNotice.sender, MAX_NAME_LENGTH, _T("SERVER"));
-                _tcscpy_s(waitNotice.content, 256, waitMsg);
-
-                DWORD bytesWritten;
-                WriteFile(hPipe, &waitNotice, sizeof(GAME_MESSAGE), &bytesWritten, NULL);
-
-                _tprintf(_T("\n[System] Player %s joined, waiting for more players (%d/2).\n"), msg.sender, cdata->sharedMem->playerCount);
+            else if (change == GAME_STATE_PAUSED) {
+               // broadcastMaker(cdata, _T("GAME PAUSED: Not enough players to continue."));
             }
+       
             ReleaseMutex(cdata->hGameMutex);
             break;
         }
@@ -912,20 +1031,8 @@ DWORD WINAPI clientHandler(LPVOID lpParam) {
                 }
             }
 
-            if (cdata->sharedMem->playerCount < 2) {
-                WaitForSingleObject(cdata->hStateMutex, INFINITE);
-                cdata->shouldContinue = 0;
-                cdata->sharedMem->running = 0;
-                ReleaseMutex(cdata->hStateMutex);
+            int change = toggleGame(cdata);
 
-                if (cdata->sharedMem->playerCount > 0) {
-                    TCHAR pauseMsg[256];
-                    _stprintf_s(pauseMsg, 256, _T("GAME PAUSED: Not enough players. Waiting for more players to join."));
-                    broadcastMaker(cdata, pauseMsg);
-                }
-
-                _tprintf(_T("\n[System] Game paused due to insufficient players (%d/2).\n"), cdata->sharedMem->playerCount);
-            }
 
             _tcscpy_s(response.content, 256, _T("Disconnected successfully."));
             TCHAR broadcastMsg[256];
@@ -1016,6 +1123,11 @@ DWORD WINAPI clientHandler(LPVOID lpParam) {
     return 0;
 }
 
+/** pipeCreator - Função que cria o pipe por utilizador
+ *
+ * @param pArguments - Ponteiro para os argumentos passados para a thread, neste caso é o cdata, mais uma vez
+ * @return 0 - Supostamente da return 0 quando acaba, mas a este andar isto nunca na vida acontece
+ */
 DWORD WINAPI pipeCreator(LPVOID pArguments) {
     GameControlData* cdata = (GameControlData*)pArguments;
 
@@ -1055,7 +1167,11 @@ DWORD WINAPI pipeCreator(LPVOID pArguments) {
 
 
 
-
+/**
+ * No main não ha muito para comentar, mas so quero deixar aqui o meu odio a semaphores
+ * , porque é que existem race conditions, porque é que as threads não são inteligentes e
+ *  tratam disso sozinhas meu.
+ */
 int _tmain(int argc, TCHAR* argv[]) {
 #ifdef UNICODE
     _setmode(_fileno(stdin), _O_WTEXT);
@@ -1078,6 +1194,12 @@ int _tmain(int argc, TCHAR* argv[]) {
 
     if (!LoadOrCreateRegistrySettings()) {
         _tprintf(_T("Usando valores padrão: MAXLETRAS = %d, RITMO = %d\n"), MAXLETRAS, RITMO);
+    }
+
+    int wordCount = 0;
+    if (!LoadDictionaryFromFile(_T("C:\\Users\\fakyc\\source\\repos\\TrabalhoPratico_SistemasOperativos2\\x64\\Debug\\dictionary_small.txt"), dictionary, &wordCount)) {
+        _tprintf(_T("Failed to load dictionary. Exiting...\n"));
+        return 1;
     }
 
     GameControlData cdata;

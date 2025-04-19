@@ -39,6 +39,10 @@
 #define MSG_DISCONNECT	6
 #define MSG_KICK		7
 
+#define GAME_STATE_NO_CHANGE 0
+#define GAME_STATE_STARTED   1
+#define GAME_STATE_PAUSED    2
+
 
 typedef struct
 {
@@ -77,7 +81,7 @@ typedef struct
 
 typedef struct
 {
-	int shouldContinue;			// 1-> continue, 0 -> stop
+	volatile int shouldContinue;			// 1-> continue, 0 -> stop
 	HANDLE hMapFile;
 	GameSharedMem* sharedMem;
 	HANDLE hGameMutex;
@@ -85,7 +89,11 @@ typedef struct
 	HANDLE hPlayerSemaphore;
 	HANDLE hCommandMutex;
 	HANDLE hStateMutex;
+	HANDLE hStartEvent;
+
 } GameControlData;
+
+
 
 typedef struct {
 	HANDLE pipe;

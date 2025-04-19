@@ -28,6 +28,10 @@ HANDLE hPipe;
 int MAXLETRAS = 6;
 int RITMO = 3000;
 
+/** LoadRegistrySettings - Carrega as configurações do registro, se não existirem, usa os valores padrão
+ *
+ * @return TRUE se tudo correr bem, FALSE se algo correr mal
+ */
 BOOL LoadRegistrySettings() {
     HKEY hKey;
     LONG result = RegOpenKeyEx(
@@ -64,7 +68,13 @@ BOOL LoadRegistrySettings() {
 }
 
 
-
+/** UpdateLetters - Atualiza as letras apresentadas na tela
+ *
+ *  A parte do SetConsoleCursorPosition permite fazer cenas bue porreiras com a consola, mas nem os gajos
+ *  do windows conseguem fazer com que isto funciona bem, so está aqui para facilitar uma beca
+ *
+ * @param cdata - Esta merda de estrutura chamada cdata não me larga
+ */
 void UpdateLetters(GameControlData* cdata) {
     CONSOLE_SCREEN_BUFFER_INFO csbi;
     GetConsoleScreenBufferInfo(hConsole, &csbi);
@@ -95,8 +105,11 @@ void UpdateLetters(GameControlData* cdata) {
 }
 
 
-
-
+/** LetterUpdateThread - Está sempre a ver se alguma letra mudou na shared memory, se sim, atualiza a letra
+ * 
+ * @param cdata - uhm cdata, mais uma vez
+ * @return - Talvez um dia
+ */
 DWORD WINAPI LetterUpdateThread(GameControlData* cdata)
 {
     TCHAR ll[MAX_MAXLETTERS] = { 0 };
@@ -117,7 +130,11 @@ DWORD WINAPI LetterUpdateThread(GameControlData* cdata)
     return 0;
 }
 
-
+/** ReceiveOverseerResponse - Recebe a resposta do arbitro, so fiz numa função porque é mais fácil
+ *
+ * @param response - Ponteiro para a mensagem recebida
+ * @return TRUE se tudo correr bem, FALSE se algo correr mal
+ */
 BOOL ReceiveOverseerResponse(GAME_MESSAGE* response) {
     if (hPipe == INVALID_HANDLE_VALUE) return FALSE;
 
@@ -139,7 +156,11 @@ BOOL ReceiveOverseerResponse(GAME_MESSAGE* response) {
     return (bytesRead > 0);
 }
 
-
+/** ConnectToGame - Conecta o jogador ao arbitro, ou seja, cria o pipe e envia a mensagem de registo
+ *
+ * @param name - Nome do jogador
+ * @return TRUE se tudo correr bem, FALSE se algo correr mal
+ */
 BOOL ConnectToGame(TCHAR* name)
 {
     WaitNamedPipe(PIPE_NAME, NMPWAIT_WAIT_FOREVER);
@@ -179,6 +200,11 @@ BOOL ConnectToGame(TCHAR* name)
     return FALSE;
 }
 
+/** SendMessageOverseer - Envia uma mensagem para o arbitro, ou seja, para o pipe
+ *
+ * @param msg - Mensagem a enviar
+ * @return TRUE se tudo correr bem, FALSE se algo correr mal
+ */
 BOOL sendMessageOverseer(GAME_MESSAGE msg)
 {
 
@@ -244,7 +270,11 @@ DWORD WINAPI broadcastListener(LPVOID lpParam) {
 }
 
 
-
+/*
+ *
+ * Honestamente acho que por agora ja temos os requisitos todos do enunciado, é so fazer testes, colocar proteções e ver ideias para o bonus
+ *
+*/
 int _tmain(int argc, TCHAR* argv[]) {
     system("cls");
 #ifdef UNICODE
