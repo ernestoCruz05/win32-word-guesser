@@ -5,10 +5,15 @@ int RITMO = 3000;
 
 HANDLE hMutex;
 HANDLE hSemaphore;
+HANDLE hSharedMemUpdatedEvent = NULL;
+HANDLE hBroadDisplayEvent = NULL;
+
+
 char abc[] = "abcdefghijklmnopqrstuvwxyz";
 char abcR[MAX_MAXLETTERS] = { '_', '_', '_', '_', '_', '_', '_', '_', '_', '_' };
 char abcRDisplay[MAX_MAXLETTERS] = { '_', '_', '_', '_', '_', '_', '_', '_', '_', '_' };
 int abcRInfo[MAX_MAXLETTERS][2]; // [Letra, Posição no Display]
+
 
 TCHAR wordBuffer[BUFFER_SIZE][MAX_WORD_LENGTH];
 int bufferStart = 0;
@@ -19,6 +24,11 @@ int broadFlag = 0;
 TCHAR dictionary[1236][MAX_WORD_LENGTH];
 PLAYER playerList[10];
 int playerCount = 0;
+
+PLAYER sorted[MAX_PLAYERS];
+LocalMem gMEM;
+
+CRITICAL_SECTION cs;
 
 /**
  * LoadOrCreateRegistrySettings - Acho que mais obvio o nome não pode ser, vai tentar ir buscar a info do RITMO e MAXLETRAS a registry, se não existir cria esse par-valor
@@ -71,14 +81,80 @@ BOOL LoadOrCreateRegistrySettings() {
         RITMO = tmp;
     }
 
+    if (MAXLETRAS > 12 ) MAXLETRAS = 12;
+    
+
     RegCloseKey(hKey);
 
     _tprintf(_T("MAXLETRAS = %d | RITMO = %d ms\n"), MAXLETRAS, RITMO);
     return TRUE;
 }
 
-/** initResources - Inicializa os recursos principais, como a shared memory e cenas da sincronização
+
+/** LoadDictionaryFromFile - Nomes mais explicativos não existem, so carrega o dicionario do ficheiro.txt,
+ *                           nem precisava de passar o nome do ficheiro porque é sempre o mesmo, mas eu até
+ *                           curto de escrever argumentos em funções. Provavelmente quando formos testar na
+ *                           defesa vai dar merda porque o caminho do ficheiro é diferente, mas isso é um problema
+ *                           para outro dia.
  * 
+ * @param filePath         - Caminho do dicionário
+ * @param dictionary       - Array onde o dicionário vai ser guardado, porque é q simplesmente não usei uma variavel global? Eu usei e como sou porreiro vou deixar assim na mesma
+ *                           , pode ser preciso aceder ao dicionario noutra função ou num futuro distante
+ * @param wordCount        - Ponteiro para o número de palavras lidas, porque é que não usei uma variavel global? Porque sou porreiro e gosto de passar argumentos
+ * @return 
+ */
+BOOL LoadDictionaryFromFile(const TCHAR* filePath, TCHAR dictionary[][MAX_WORD_LENGTH], int* wordCount) {
+    FILE* file;
+    _tfopen_s(&file, filePath, _T("r"));
+    if (file == NULL) {
+        _tprintf(_T("Failed to open dictionary file: %s\n"), filePath);
+        return FALSE;
+    }
+
+    int count = 0;
+    while (_fgetts(dictionary[count], MAX_WORD_LENGTH, file) != NULL) {
+        size_t len = _tcslen(dictionary[count]);
+        if (len > 0 && dictionary[count][len - 1] == '\n') dictionary[count][len - 1] = '\0';
+        
+        count++;
+
+        if (count >= 1236) break;
+    }
+
+    *wordCount = count;
+    fclose(file);
+
+    _tprintf(_T("Dictionary loaded successfully with %d words.\n"), count);
+    return TRUE;
+}
+
+BOOL LoadPath(TCHAR dictionary[][MAX_WORD_LENGTH], int* wordCount) {
+    TCHAR filePath[MAX_PATH];
+    DWORD pathLen = GetModuleFileName(NULL, filePath, MAX_PATH);
+
+    if (pathLen == 0 || pathLen == MAX_PATH) {
+        _tprintf(_T("Failed to get module path (Error: %d)\n"), GetLastError());
+        return FALSE;
+    }
+
+    TCHAR* lastSlash = _tcsrchr(filePath, _T('\\'));
+    if (lastSlash != NULL)  *lastSlash = _T('\0');
+
+    else {
+        _tprintf(_T("Unexpected path format\n"));
+        return FALSE;
+    }
+
+    if (_tcscat_s(filePath, MAX_PATH, _T("\\dictionary.txt")) != 0) {
+        _tprintf(_T("Failed to build dictionary path\n"));
+        return FALSE;
+    }
+
+    return LoadDictionaryFromFile(filePath, dictionary, wordCount);
+}
+
+/** initResources - Inicializa os recursos principais, como a shared memory e cenas da sincronização
+ *
  * @param cdata - Genuinamente queria encontrar uma maneira mais facil de chamar este parametro, talvez
  *                definir cdata como global, mas acho q isso dava merda, por isso gramamos com passar *cdata
  *                constantemente
@@ -96,10 +172,8 @@ BOOL initResources(GameControlData* cdata)
         SHM_NAME
     );
 
-    if (cdata->hMapFile == NULL)
-    {
-        return FALSE;
-    }
+    if (cdata->hMapFile == NULL) return FALSE;
+   
 
     cdata->sharedMem = (GameSharedMem*)MapViewOfFile(
         cdata->hMapFile,
@@ -142,7 +216,7 @@ BOOL initResources(GameControlData* cdata)
     );
     cdata->hStateMutex = CreateMutex(NULL, FALSE, STATE_MUTEX_NAME);
 
-    cdata->hStartEvent = CreateEvent(NULL, TRUE, FALSE, NULL); 
+    cdata->hStartEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
 
     WaitForSingleObject(cdata->hGameMutex, INFINITE);
     memset(cdata->sharedMem->letters, '_', MAXLETRAS);
@@ -154,81 +228,43 @@ BOOL initResources(GameControlData* cdata)
     _tcscpy_s(cdata->sharedMem->currentLeader, MAX_NAME_LENGTH, _T(""));
     ReleaseMutex(cdata->hGameMutex);
 
+    InitializeCriticalSection(&cs);
+
+    if (!LoadOrCreateRegistrySettings()) _tprintf(_T("Usando valores padrão: MAXLETRAS = %d, RITMO = %d\n"), MAXLETRAS, RITMO);
+    
+
+    int wordCount = 0;
+    if (!LoadPath(dictionary, &wordCount)) {
+        _tprintf(_T("Failed to load dictionary. Exiting...\n"));
+        return 1;
+    }
+
+
+    hSharedMemUpdatedEvent = CreateEvent(
+        NULL,               
+        TRUE,               
+        FALSE,              
+        _T("Global\\SharedMemUpdatedEvent")  
+    );
+
+    hBroadDisplayEvent = CreateEvent(
+        NULL,
+        TRUE,
+        FALSE,
+        _T("Global\\BroadcastEvent")
+    );
+
     cdata->shouldContinue = 0;
 
     return TRUE;
 }
 
-/** LoadDictionaryFromFile - Nomes mais explicativos não existem, so carrega o dicionario do ficheiro.txt,
- *                           nem precisava de passar o nome do ficheiro porque é sempre o mesmo, mas eu até
- *                           curto de escrever argumentos em funções. Provavelmente quando formos testar na
- *                           defesa vai dar merda porque o caminho do ficheiro é diferente, mas isso é um problema
- *                           para outro dia.
- * 
- * @param filePath         - Caminho do dicionário
- * @param dictionary       - Array onde o dicionário vai ser guardado, porque é q simplesmente não usei uma variavel global? Eu usei e como sou porreiro vou deixar assim na mesma
- *                           , pode ser preciso aceder ao dicionario noutra função ou num futuro distante
- * @param wordCount        - Ponteiro para o número de palavras lidas, porque é que não usei uma variavel global? Porque sou porreiro e gosto de passar argumentos
- * @return 
- */
-BOOL LoadDictionaryFromFile(const TCHAR* filePath, TCHAR dictionary[][MAX_WORD_LENGTH], int* wordCount) {
-    FILE* file;
-    _tfopen_s(&file, filePath, _T("r"));
-    if (file == NULL) {
-        _tprintf(_T("Failed to open dictionary file: %s\n"), filePath);
-        return FALSE;
-    }
-
-    int count = 0;
-    while (_fgetts(dictionary[count], MAX_WORD_LENGTH, file) != NULL) {
-        size_t len = _tcslen(dictionary[count]);
-        if (len > 0 && dictionary[count][len - 1] == '\n') {
-            dictionary[count][len - 1] = '\0';
-        }
-        count++;
-
-        if (count >= 1236) {
-            break;
-        }
-    }
-
-    *wordCount = count;
-    fclose(file);
-
-    _tprintf(_T("Dictionary loaded successfully with %d words.\n"), count);
-    return TRUE;
-}
-
-
-/** printABCR - Imprime o array abcR, ja fizemos isto a tanto tempo que ja nao me lembro
- *                da diferença entre isto e o abcRDisplay.
- */
-void printABCR() {
-    _tprintf(_T("\n\nabcR (Oldest comes first): "));
-    for (int i = 0; i < MAXLETRAS; i++) {
-        _tprintf(_T("%c "), abcR[i]);
-    }
-    _tprintf(_T("\n"));
-}
-
-/** printABCRDisplay - Nem te vais acreditar no que esta função faz...
- *                
- */
-
-void printABCRDisplay() {
-    _tprintf(_T("\n\nabcRDisplay (What players see): "));
-    for (int i = 0; i < MAXLETRAS; i++) {
-        _tprintf(_T("%c "), abcRDisplay[i]);
-    }
-    _tprintf(_T("\n"));
-}
 
 /** createLetter - Escolhe uma letra aleatoria e coloca-a na posição indicada
  * 
  * @param pos - Nunca vais adivinhar, é a posição onde a letra vai ser colocada
  */
 void createLetter(int pos) {
-    _tprintf(_T("[DEBUG] createLetter called for pos %d\n"), pos);
     int r = rand() % 26;
     abcR[pos] = abc[r];
 
@@ -273,6 +309,20 @@ void copyData(GameControlData* cdata)
     memcpy(cdata->sharedMem->letterInfo, abcRInfo, sizeof(abcRInfo));
 }
 
+void sharedLeaderbaord(GameControlData* cdata)
+{
+    WaitForSingleObject(cdata->hGameMutex, INFINITE);
+	int entries = min(cdata->sharedMem->playerCount, 10);
+    _tprintf(_T("Entries: %d"), entries);
+    for (int i = 0 ; i < entries ; i++)
+    {
+        _tcscpy_s(cdata->sharedMem->uiLeaderboardNames[i], _countof(sorted[i].name), sorted[i].name);
+        cdata->sharedMem->uiLeaderboardPoints[i] = sorted[i].points;
+        _tprintf(_T("User:%s Points:%d "), sorted[i].name, cdata->sharedMem->uiLeaderboardPoints[i]);
+    }
+    ReleaseMutex(cdata->hGameMutex);
+}
+
 /** toggleGame - Função schizo que crier enquanto tentatava perceber o erro do broadcast, basicamente so
  *               ve se tem jogadores sufecientes para começar o jogo ou não, se sim, começa o jogo
  * 
@@ -281,6 +331,15 @@ void copyData(GameControlData* cdata)
  *         GAME_STATE_STARTED - O jogo começou, ou seja, tem 2 jogadores
  *         GAME_STATE_PAUSED - O jogo parou, ou seja, tem menos de 2 jogadores
  */
+
+void DuplicateToLocal(GameControlData* cdata)
+{
+    memcpy(gMEM.displayedLetters, abcRDisplay, MAXLETRAS);
+    EnterCriticalSection(&cs);
+    memcpy(gMEM.playerList, cdata->sharedMem->playerList, sizeof(PLAYER) * MAX_PLAYERS);
+    LeaveCriticalSection(&cs);
+}
+
 int toggleGame(GameControlData* cdata) {
     int result = GAME_STATE_NO_CHANGE;
 
@@ -310,51 +369,53 @@ int toggleGame(GameControlData* cdata) {
  * @return Por agora as threads não acabam gracefully, mas se calhar um dia conseguimos implementar isso, aposto que é so trocar o while
  */
 DWORD WINAPI GeraLetrasThread(LPVOID pArguments) {
-    _tprintf(_T("[GeraLetrasThread] Started\n"));
     GameControlData* cdata = (GameControlData*)pArguments;
-    int cont = 0;
-    int a = 1;
+    int emptyCounter = 0;
+    int firstFillFlag = 0;
+
     while (1) {
 
         WaitForSingleObject(cdata->hStartEvent, INFINITE);
+    	Sleep(RITMO);
 
+    	WaitForSingleObject(cdata->hGameMutex, INFINITE);
 
-        if (a)
+        emptyCounter = 0;
+
+        if (firstFillFlag == 0)
         {
-            Sleep(RITMO);
-            WaitForSingleObject(cdata->hGameMutex, INFINITE);
-
+            for (int i = 0; i < MAXLETRAS; i++) {
+                if (abcR[i] == '_') {
+                    createLetter(i);
+                    firstFillFlag = 1;
+                    emptyCounter++;
+                }
+            }
+        }
 
             for (int i = 0; i < MAXLETRAS; i++) {
                 if (abcR[i] == '_') {
                     createLetter(i);
-                    copyData(cdata);
-                    cont = 0;
-                }
-                else {
-                    cont++;
+                    emptyCounter++;
+                    break;
                 }
             }
 
-            if (cont == MAXLETRAS) {
+            if (emptyCounter == 0) {
                 removeOldest();
                 createLetter(MAXLETRAS - 1);
-                copyData(cdata);
+                ReleaseMutex(cdata->hGameMutex);
             }
 
 
-            cont = 0;
+            copyData(cdata);
+            DuplicateToLocal(cdata);
+            SetEvent(hSharedMemUpdatedEvent);
+
             ReleaseSemaphore(cdata->hLetterSemaphore, 1, NULL);
             ReleaseMutex(cdata->hGameMutex);
-        }
-        else
-        {
-            Sleep(500);
-        }
-
     }
     return 0;
-
 }
 
 /** countLetters - Conta as letras que existem no array abcR, e imprime quantas existem
@@ -392,6 +453,10 @@ int validateGuess(TCHAR* guess) {
     int needed[26] = { 0 };
     int have[26] = { 0 };
     int found = 0;
+
+    for (int i = 0; guess[i]; i++) {
+        guess[i] = tolower(guess[i]);
+    }
 
     _tprintf(_T("Validating guess: %s\n"), guess);
 
@@ -469,7 +534,6 @@ int validateGuess(TCHAR* guess) {
     }
 
     ReleaseMutex(hMutex);
-
     _tprintf(_T("Valid guess!\n"));
     return 1;
 }
@@ -566,6 +630,16 @@ void displaySharedMemory(GameControlData* cdata) {
     ReleaseMutex(cdata->hGameMutex);
 }
 
+void displayLocalMemory() {
+
+    _tprintf(_T("\n=== Shared Memory Contents ===\n"));
+    _tprintf(_T("Displayed Letters: "));
+    for (int i = 0; i < MAXLETRAS; i++) {
+        _tprintf(_T("%c "), gMEM.displayedLetters);
+    }
+
+}
+
 /** broadcastMaker - Nunca tive tanta raiva de uma função, basicamente faz broadcast a todos os jogadores, quando lhe apetece
  *                   pelo que me apercebi.
  * 
@@ -574,7 +648,6 @@ void displaySharedMemory(GameControlData* cdata) {
  */
 void broadcastMaker(GameControlData* cdata, const TCHAR* messageContent)
 {
-    WaitForSingleObject(cdata->hGameMutex, INFINITE);
 
     GAME_MESSAGE broadcast;
     broadcast.msgType = MSG_BROADCAST;
@@ -605,7 +678,14 @@ void broadcastMaker(GameControlData* cdata, const TCHAR* messageContent)
         }
     }
     _tprintf(_T("\n[Broadcast] %s\n"), messageContent);
+    TCHAR shared[256];
+    _stprintf_s(shared, 256, _T("Overseer > %s"), messageContent);
 
+    WaitForSingleObject(cdata->hGameMutex, INFINITE);
+    _tcscpy_s(cdata->sharedMem->uiBroadDisplay, 256, shared);
+    ReleaseMutex(cdata->hGameMutex);
+
+    SetEvent(hBroadDisplayEvent);
 }
 
 /** LaunchBot - Lança o bot, ou seja, cria um processo novo com o bot.exe e passa-lhe os argumentos, porque é que é a unica função
@@ -900,6 +980,29 @@ void processCommand(TCHAR* command, GameControlData* cdata) {
         ReleaseMutex(hMutex);
     }
 }
+
+void updateSortedPlayers(GameControlData* cdata) {
+    int count = 0;
+
+    WaitForSingleObject(cdata->hGameMutex, INFINITE);
+    for (int i = 0; i < cdata->sharedMem->playerCount; i++) {
+        if (cdata->sharedMem->playerList[i].active) {
+            sorted[count++] = cdata->sharedMem->playerList[i];
+        }
+    }
+
+    for (int i = 0; i < count - 1; i++) {
+        for (int j = i + 1; j < count; j++) {
+            if (sorted[j].points > sorted[i].points) {
+                PLAYER temp = sorted[i];
+                sorted[i] = sorted[j];
+                sorted[j] = temp;
+            }
+        }
+    }
+    ReleaseMutex(cdata->hGameMutex);
+}
+
 /** clientHandler - Função que lida com os clientes, ou seja, recebe mensagens dos clientes e processa-as
  *
  * @param lpParam - Ponteiro para os argumentos passados para a thread, neste caso é o cdata, mais uma vez
@@ -957,18 +1060,16 @@ DWORD WINAPI clientHandler(LPVOID lpParam) {
             _stprintf_s(response.content, 256, _T("Welcome %s!"), msg.sender);
             TCHAR braod[256];
             _stprintf_s(braod, 256, _T("User %s connected to the game!"), msg.sender);
+
             broadcastMaker(cdata, braod);
+
 
             int change = toggleGame(cdata);
             if (change == GAME_STATE_STARTED) {
-                // Por muito que eu gostasse de perceber oq está a causar o pipe do primeiro jogador crashar
-                // ate que o segundo jogador dé input a alguma coisa, eu genuinamente não consigo ver, os mutexes
-                // estão todos bem, nada está a ser acedido onde não devia, os pipes deviam estar limpos sem problemas
-                // mas mesmo assim eu esta merda de broadcast não funciona e eu estou farto de tentar arranjar isto, vai assim.
-               // broadcastMaker(cdata, _T("GAME STARTED: Enough players are connected!"));
+                broadcastMaker(cdata, _T("GAME STARTED: Enough players are connected!"));
             }
             else if (change == GAME_STATE_PAUSED) {
-               // broadcastMaker(cdata, _T("GAME PAUSED: Not enough players to continue."));
+                broadcastMaker(cdata, _T("GAME PAUSED: Not enough players to continue."));
             }
        
             ReleaseMutex(cdata->hGameMutex);
@@ -985,22 +1086,25 @@ DWORD WINAPI clientHandler(LPVOID lpParam) {
                 }
             }
             else if (_tcscmp(msg.content, _T(":jogs")) == 0) {
-                PLAYER sorted[MAX_PLAYERS];
                 int count = 0;
-
+                PLAYER sorted2[MAX_PLAYERS];
                 for (int i = 0; i < cdata->sharedMem->playerCount; i++) {
                     if (cdata->sharedMem->playerList[i].active) {
-                        sorted[count++] = cdata->sharedMem->playerList[i];
+                        EnterCriticalSection(&cs);
+                        sorted2[count++] = cdata->sharedMem->playerList[i];
+                        LeaveCriticalSection(&cs);
                     }
                 }
 
                 for (int i = 0; i < count - 1; i++) {
                     for (int j = i + 1; j < count; j++) {
-                        if (sorted[j].points > sorted[i].points) {
-                            PLAYER temp = sorted[i];
-                            sorted[i] = sorted[j];
-                            sorted[j] = temp;
+                        EnterCriticalSection(&cs);
+                        if (sorted2[j].points > sorted2[i].points) {
+                            PLAYER temp = sorted2[i];
+                            sorted2[i] = sorted2[j];
+                            sorted2[j] = temp;
                         }
+                        LeaveCriticalSection(&cs);
                     }
                 }
 
@@ -1008,7 +1112,7 @@ DWORD WINAPI clientHandler(LPVOID lpParam) {
                 for (int i = 0; i < count; i++) {
                     TCHAR line[64];
                     _stprintf_s(line, 64, _T("%d. %s - %d pts\n"),
-                        i + 1, sorted[i].name, sorted[i].points);
+                        i + 1, sorted2[i].name, sorted2[i].points);
                     _tcscat_s(buffer, 256, line);
                 }
 
@@ -1055,10 +1159,15 @@ DWORD WINAPI clientHandler(LPVOID lpParam) {
                 {
                     if (_tcscmp(cdata->sharedMem->playerList[i].name, msg.sender) == 0) {
                         pointsGiven = _tcslen(msg.content);
+                        WaitForSingleObject(cdata->hGameMutex, INFINITE);
                         cdata->sharedMem->playerList[i].points += pointsGiven;
+                        _tcscpy_s(cdata->sharedMem->uiLastGuess, _countof(cdata->sharedMem->uiLastGuess), msg.content);
+                        ReleaseMutex(cdata->hGameMutex);
                         break;
                     }
                 }
+                updateSortedPlayers(cdata);
+                sharedLeaderbaord(cdata);
             }
             else if (!valid)
             {
@@ -1075,9 +1184,12 @@ DWORD WINAPI clientHandler(LPVOID lpParam) {
                             cdata->sharedMem->playerList[i].points -= pointsGiven;
 
                         }
+
                         break;
                     }
                 }
+                updateSortedPlayers(cdata);
+                sharedLeaderbaord(cdata);
             }
             response.msgType = MSG_RESPONSE;
             if (valid)
@@ -1178,6 +1290,8 @@ int _tmain(int argc, TCHAR* argv[]) {
     _setmode(_fileno(stdout), _O_WTEXT);
     _setmode(_fileno(stderr), _O_WTEXT);
 #endif
+
+
     HANDLE hSingleInstanceMutex = CreateMutex(NULL, TRUE, _T("Global\\OverseerSingleInstanceMutex"));
     DWORD lastError = GetLastError();
 
@@ -1192,21 +1306,13 @@ int _tmain(int argc, TCHAR* argv[]) {
         return 1;
     }
 
-    if (!LoadOrCreateRegistrySettings()) {
-        _tprintf(_T("Usando valores padrão: MAXLETRAS = %d, RITMO = %d\n"), MAXLETRAS, RITMO);
-    }
-
-    int wordCount = 0;
-    if (!LoadDictionaryFromFile(_T("C:\\Users\\fakyc\\source\\repos\\TrabalhoPratico_SistemasOperativos2\\x64\\Debug\\dictionary_small.txt"), dictionary, &wordCount)) {
-        _tprintf(_T("Failed to load dictionary. Exiting...\n"));
-        return 1;
-    }
 
     GameControlData cdata;
     if (!initResources(&cdata)) {
         _tprintf(_T("Failed to initialize resources\n"));
         return 1;
     }
+
     cdata.shouldContinue = 0;
     hMutex = CreateMutex(NULL, FALSE, NULL);
     if (hMutex == NULL) {
@@ -1239,6 +1345,7 @@ int _tmain(int argc, TCHAR* argv[]) {
         }
         else if (_tcscmp(cmd, _T("show mem")) == 0) {
             displaySharedMemory(&cdata);
+            displayLocalMemory();
         }
         else {
             processCommand(cmd, &cdata);
@@ -1322,7 +1429,7 @@ int _tmain(int argc, TCHAR* argv[]) {
         CloseHandle(hSemaphore);
     }
     CloseHandle(hSingleInstanceMutex);
-
+    DeleteCriticalSection(&cs);
     _tprintf(_T("Overseer shutdown complete.\n"));
     return 0;
 }

@@ -25,6 +25,7 @@ HANDLE hConsole;
 COORD inputPos = { 0, 0 };
 HANDLE hPipe;
 
+
 int MAXLETRAS = 6;
 int RITMO = 3000;
 
@@ -112,21 +113,36 @@ void UpdateLetters(GameControlData* cdata) {
  */
 DWORD WINAPI LetterUpdateThread(GameControlData* cdata)
 {
+    HANDLE hUpdateEvent = OpenEvent(EVENT_ALL_ACCESS, FALSE, TEXT("Global\\SharedMemUpdatedEvent"));
+    if (hUpdateEvent == NULL) {
+        MessageBox(NULL, _T("Could not open update event"), _T("Error"), MB_OK | MB_ICONERROR);
+        return 1;
+    }
+
     TCHAR ll[MAX_MAXLETTERS] = { 0 };
 
-    UpdateLetters(cdata);
+    // Initial update
+    WaitForSingleObject(cdata->hGameMutex, INFINITE);
     memcpy(ll, cdata->sharedMem->displayedLetters, MAXLETRAS);
+    ReleaseMutex(cdata->hGameMutex);
+    UpdateLetters(cdata);
 
     while (1)
     {
+        WaitForSingleObject(hUpdateEvent, INFINITE);
+
         WaitForSingleObject(cdata->hGameMutex, INFINITE);
         if (memcmp(ll, cdata->sharedMem->displayedLetters, MAXLETRAS)) {
             memcpy(ll, cdata->sharedMem->displayedLetters, MAXLETRAS);
+            ReleaseMutex(cdata->hGameMutex);
             UpdateLetters(cdata);
         }
-        ReleaseMutex(cdata->hGameMutex);
-        Sleep(200);
+        else {
+            ReleaseMutex(cdata->hGameMutex);
+        }
+
     }
+
     return 0;
 }
 
@@ -159,7 +175,7 @@ BOOL ReceiveOverseerResponse(GAME_MESSAGE* response) {
 /** ConnectToGame - Conecta o jogador ao arbitro, ou seja, cria o pipe e envia a mensagem de registo
  *
  * @param name - Nome do jogador
- * @return TRUE se tudo correr bem, FALSE se algo correr mal
+ * @return TRUE se tudo correr bem, FALSE se algo correr mal (i.e o nome ja existir)
  */
 BOOL ConnectToGame(TCHAR* name)
 {
@@ -250,6 +266,7 @@ DWORD WINAPI broadcastListener(LPVOID lpParam) {
         if (success && bytesRead > 0) {
             if (msg.msgType == MSG_BROADCAST) {
                 _tprintf(_T("\n[Broadcast] %s\n"), msg.content);
+               
             }
             else if (msg.msgType == MSG_RESPONSE) {
                 _tprintf(_T("\n[Server] %s\n"), msg.content);
@@ -285,7 +302,7 @@ int _tmain(int argc, TCHAR* argv[]) {
 
 
     if (!LoadRegistrySettings()) {
-        _tprintf(_T("Usando valores padrão: MAXLETRAS = %d, RITMO = %d\n"), MAXLETRAS, RITMO);
+        _tprintf(_T("Using values: MAXLETRAS = %d, RITMO = %d\n"), MAXLETRAS, RITMO);
     }
 
     TCHAR name[32];
@@ -346,7 +363,7 @@ int _tmain(int argc, TCHAR* argv[]) {
         }
 
         SetConsoleCursorPosition(hConsole, (COORD) { 0, INPUT_START_Y });
-        _tprintf(_T("\nEscreve uma palavra ou comando (:pont, :jogs, :sair):\n> "));
+        _tprintf(_T("\Write a guess or a command (:pont, :jogs, :sair):\n> "));
 
         SetConsoleCursorPosition(hConsole, (COORD) { 2, INPUT_START_Y + 2 });
         _fgetts(input, MAX_WORD_LENGTH, stdin);
@@ -379,7 +396,7 @@ int _tmain(int argc, TCHAR* argv[]) {
                 sendMessageOverseer(msg);
             }
             else {
-                _tprintf(_T("Comando desconhecido: %s\n"), input);
+                _tprintf(_T("Unknown command: %s\n"), input);
             }
         }
         else {

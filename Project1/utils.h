@@ -13,13 +13,14 @@
 #include <conio.h>
 #include <time.h>
 
-
+#pragma comment(lib, "Msimg32.lib")
 
 #define MAX_WORD_LENGTH 12
 #define BUFFER_SIZE 10
 #define MAX_NAME_LENGTH 25
 #define MAX_PLAYERS 10
 #define MAX_MAXLETTERS 12
+#define MAX_CHAT_LINES 10
 
 #define SHM_NAME _T("SHM_LETTERS")
 #define LETTER_MUTEX_NAME _T("LETTERS_MUTEX")
@@ -70,7 +71,19 @@ typedef struct
 	int running;					// 1-> The game is running (i.e 1 or more players are connected), 0-> game is stopped
 	int currentLeaderPoints;
 	TCHAR currentLeader[25];
+	int uiLetters;					
+	TCHAR uiLastGuess[256];
+	TCHAR uiLeaderboardNames[10][MAX_NAME_LENGTH];
+	int uiLeaderboardPoints[10];
+	TCHAR uiBroadDisplay[256];
 } GameSharedMem;
+
+typedef struct
+{
+	char displayedLetters[12];
+	PLAYER playerList[MAX_PLAYERS];
+} LocalMem;
+
 
 typedef struct
 {
@@ -99,5 +112,6 @@ typedef struct {
 	HANDLE pipe;
 	GameControlData* cdata;
 } PipeClientContext;
+
 
 #endif 

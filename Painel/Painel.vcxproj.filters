@@ -27,14 +27,23 @@
     <ClInclude Include="Painel.h">
       <Filter>Arquivos de Cabeçalho</Filter>
     </ClInclude>
+    <ClInclude Include="..\Project1\utils.h">
+      <Filter>Arquivos de Cabeçalho</Filter>
+    </ClInclude>
+    <ClInclude Include="resource1.h">
+      <Filter>Arquivos de Cabeçalho</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="Painel.cpp">
+    <ClCompile Include="Painel.c">
       <Filter>Arquivos de Origem</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="Painel.rc">
+      <Filter>Arquivos de Recurso</Filter>
+    </ResourceCompile>
+    <ResourceCompile Include="Resource.rc">
       <Filter>Arquivos de Recurso</Filter>
     </ResourceCompile>
   </ItemGroup>

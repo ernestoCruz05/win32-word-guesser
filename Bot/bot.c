@@ -5,6 +5,7 @@ HANDLE hPipe = INVALID_HANDLE_VALUE;
 // 90% das funções foram copiadas do jogoui.c, por isso não vou comentar
 
 
+
 BOOL ReceiveOverseerResponse(GAME_MESSAGE* response) {
     if (hPipe == INVALID_HANDLE_VALUE) return FALSE;
 
